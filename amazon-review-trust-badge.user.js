@@ -2,7 +2,7 @@
 // @name         Amazon Reviewer Trust Badge (Quality Check & Fake Detector)
 // @name:ja      Amazonレビュー信頼度判定バッジ (サクラ識別 & 品質チェック)
 // @namespace    https://github.com/koyasi777/amazon-review-trust-badge
-// @version      1.0.0
+// @version      1.0.1
 // @description  Visualizes the reliability of Amazon reviewers based on their review history. Detects suspicious behavior, bias, and low-quality reviews with a detailed trust score badge.
 // @description:ja Amazonのレビュアーの投稿履歴を分析し、信頼度を視覚化します。サクラやバイアス、低品質なレビューを検出し、S〜Dのランクでバッジ表示。詳細レポートで評価の偏りや文字数、写真投稿率などを確認できます。
 // @author       koyasi777
@@ -113,7 +113,7 @@
         static processing = false;
         static circuitOpen = false;
 
-        static async fetch(url) {
+        static async fetch(url, priority = false) {
             if (this.circuitOpen) throw new Error('CIRCUIT_OPEN: Emergency Lock');
             const lockUntil = await GM.getValue('emergency_lock', 0);
             if (Date.now() < lockUntil) {
@@ -121,7 +121,14 @@
                 throw new Error(`Locked until ${new Date(lockUntil).toLocaleTimeString()}`);
             }
             return new Promise((resolve, reject) => {
-                this.queue.push({ url, resolve, reject });
+                const item = { url, resolve, reject };
+                if (priority) {
+                    // 優先の場合は先頭に割り込み(unshift)
+                    this.queue.unshift(item);
+                } else {
+                    // 通常(自動)は最後尾に追加
+                    this.queue.push(item);
+                }
                 this.processQueue();
             });
         }
@@ -651,7 +658,8 @@
                 if (wrapper.dataset.res) this.show(JSON.parse(wrapper.dataset.res), id, wrapper, currentCtx);
                 else {
                     App.observer.unobserve(wrapper);
-                    await App.run(id, wrapper, currentCtx);
+                    // ここで true を渡すことで「割り込み」を指示
+                    await App.run(id, wrapper, currentCtx, true);
                 }
             };
 
@@ -822,19 +830,21 @@
 
         async reload(id, wrapper, context) {
             await CacheManager.remove(id);
-            await this.run(id, wrapper, context);
+            await this.run(id, wrapper, context, true);
         },
 
-        async run(id, wrapper, context) {
+        async run(id, wrapper, context, priority = false) {
             this.ui.load(wrapper);
             try {
                 let url = `https://www.amazon.co.jp/gp/profile/${id}`;
-                let html = await NetworkManager.fetch(url);
+                // fetchにpriorityを渡す
+                let html = await NetworkManager.fetch(url, priority);
                 let res = Parser.parse(html);
 
                 if (res.error === 'NO_DATA') {
                     url = `https://www.amazon.co.jp/gp/profile/${id}/reviews`;
-                    html = await NetworkManager.fetch(url);
+                    // こちらも同様にpriorityを渡す
+                    html = await NetworkManager.fetch(url, priority);
                     res = Parser.parse(html);
                 }
 
