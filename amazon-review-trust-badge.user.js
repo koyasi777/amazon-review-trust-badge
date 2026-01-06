@@ -2,7 +2,7 @@
 // @name         Amazon Reviewer Trust Badge (Quality Check & Fake Detector)
 // @name:ja      Amazonレビュー信頼度判定バッジ (サクラ識別 & 品質チェック)
 // @namespace    https://github.com/koyasi777/amazon-review-trust-badge
-// @version      1.0.1
+// @version      1.0.2
 // @description  Visualizes the reliability of Amazon reviewers based on their review history. Detects suspicious behavior, bias, and low-quality reviews with a detailed trust score badge.
 // @description:ja Amazonのレビュアーの投稿履歴を分析し、信頼度を視覚化します。サクラやバイアス、低品質なレビューを検出し、S〜Dのランクでバッジ表示。詳細レポートで評価の偏りや文字数、写真投稿率などを確認できます。
 // @author       koyasi777
@@ -442,17 +442,92 @@
             this.createOverlay();
             const s = document.createElement('style');
             s.textContent = `
+                /* ベーススタイル */
                 .tb-wrapper { display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; margin-left: 8px; font-family: "Amazon Ember", Arial, sans-serif; line-height:1; }
-                .tb-badge { padding: 3.4px 7px; border-radius: 4px; font-size: 11.5px; font-weight: bold; cursor: pointer; border: 1px solid #ccc; background: #f8f8f8; color: #333; user-select: none; transition: all 0.2s; white-space: nowrap; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
-                .tb-badge:hover { filter: brightness(0.95); transform: translateY(-1px); }
-                .tb-loading { color: #666; animation: tb-pulse 1.5s infinite; cursor: wait; }
-                .tb-wait { color: #999; border-style: dashed; }
+
+                /* バッジの基本形状 */
+                .tb-badge {
+                    padding: 3px 8px;
+                    border-radius: 12px;
+                    font-size: 11px;
+                    font-weight: 700;
+                    cursor: pointer;
+                    border: 1px solid transparent;
+                    color: #555;
+                    user-select: none;
+                    transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+                    white-space: nowrap;
+                    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 4px;
+                    background: #fdfdfd;
+                    border-color: #e2e8f0;
+                }
+
+                .tb-badge:hover { transform: translateY(-1px); box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+
+                /* --- 状態: 待機中 (Queue) --- */
+                .tb-queue {
+                    background: #f7fafc;
+                    color: #718096;
+                    border-color: #cbd5e0;
+                    animation: tb-breath 2s infinite ease-in-out;
+                }
+                .tb-queue::before {
+                    content: "⏱";
+                    font-size: 11px;
+                    opacity: 0.8;
+                }
+                .tb-queue::after {
+                    content: "待機中";
+                    font-size: 10px;
+                    margin-left: 4px;
+                    opacity: 0.8;
+                }
+
+                /* ホバーで「Boost」モードへ変身 */
+                .tb-queue:hover {
+                    background: #fffaf0;
+                    border-color: #fbd38d;
+                    color: #c05621;
+                    animation: none;
+                    transform: translateY(-2px) scale(1.05);
+                    box-shadow: 0 4px 12px rgba(237, 137, 54, 0.25);
+                }
+                .tb-queue:hover::before { content: "⚡"; }
+                .tb-queue:hover::after { content: "今すぐ解析"; font-weight: bold; }
+
+                /* --- 状態: ロード中 (Processing) --- */
+                .tb-loading {
+                    background: #ebf8ff;
+                    border-color: #90cdf4;
+                    color: #2b6cb0;
+                    cursor: pointer; /* 変更: wait -> pointer */
+                }
+                .tb-loading::before {
+                    content: "↻";
+                    display: inline-block;
+                    animation: tb-spin 0.8s linear infinite;
+                    font-size: 12px;
+                }
+                .tb-loading::after {
+                    content: "解析中...";
+                    font-size: 10px;
+                    margin-left: 4px;
+                }
+
                 .tb-error { background: #fff5f5; border-color: #fc8181; color: #c53030; }
                 .tb-grade-S { background: #c6f6d5; border-color: #48bb78; color: #22543d; }
                 .tb-grade-A { background: #f0fff4; border-color: #9ae6b4; color: #276749; }
                 .tb-grade-B { background: #fffff0; border-color: #fbd38d; color: #744210; }
                 .tb-grade-C { background: #fffaf0; border-color: #f6ad55; color: #9c4221; }
                 .tb-grade-D { background: #fff5f5; border-color: #fc8181; color: #9b2c2c; }
+
+                @keyframes tb-breath { 0%{border-color:#cbd5e0;} 50%{border-color:#a0aec0; background:#edf2f7;} 100%{border-color:#cbd5e0;} }
+                @keyframes tb-spin  { 100% { transform: rotate(360deg); } }
+                @keyframes tb-pulse { 0%{opacity:1;} 50%{opacity:0.5;} 100%{opacity:1;} }
+
                 .tb-tags-container { display: inline-flex; gap: 2px; cursor: pointer; }
                 .tb-tag-inline { font-size: 9px; padding: 1px 4px; border-radius: 3px; border: 1px solid; cursor: pointer; white-space: nowrap; transition: opacity 0.2s; }
                 .tb-tag-inline:hover { opacity: 0.8; }
@@ -464,8 +539,7 @@
                 .tb-reload-mini:hover { color: #333; background: #f0f0f0; }
                 .tb-reload-mini.act { display: inline-block; }
                 .tb-reload-mini.spinning { animation: tb-spin 0.8s linear infinite; pointer-events: none; color: #ccc; }
-                @keyframes tb-pulse { 0%{opacity:1;} 50%{opacity:0.5;} 100%{opacity:1;} }
-                @keyframes tb-spin  { 100% { transform: rotate(360deg); } }
+
                 #tb-pop { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 9999; display: none; align-items: center; justify-content: center; }
                 #tb-pop.act { display: flex; }
                 .tb-win { background: #fff; width: 95%; max-width: 420px; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); font-family: "Amazon Ember", sans-serif; position: relative; }
@@ -655,8 +729,10 @@
             const openReport = async (e) => {
                 e.preventDefault(); e.stopPropagation();
                 const currentCtx = JSON.parse(wrapper.dataset.ctx || '{}');
-                if (wrapper.dataset.res) this.show(JSON.parse(wrapper.dataset.res), id, wrapper, currentCtx);
-                else {
+                if (wrapper.dataset.res) {
+                    this.show(JSON.parse(wrapper.dataset.res), id, wrapper, currentCtx);
+                } else {
+                    this.load(wrapper);
                     App.observer.unobserve(wrapper);
                     // ここで true を渡すことで「割り込み」を指示
                     await App.run(id, wrapper, currentCtx, true);
@@ -664,9 +740,9 @@
             };
 
             const badge = document.createElement('span');
-            badge.className = 'tb-badge tb-wait';
-            badge.innerText = '⏳';
-            badge.title = '信頼度分析詳細を表示';
+            badge.className = 'tb-badge tb-queue';
+            badge.innerText = '';
+            badge.title = 'クリックで優先的に解析を開始します';
             badge.onclick = openReport;
 
             const ctxContainer = document.createElement('span');
@@ -719,9 +795,11 @@
                     badge.style.color = '#4b5563';
                     badge.style.borderColor = '#d1d5db';
                     badge.innerText = '🔒 非表示';
+                    badge.title = '詳細レポートを表示';
                 } else {
                     badge.className = 'tb-badge tb-error';
                     badge.innerText = '!';
+                    badge.title = 'エラーが発生しました';
                 }
             } else if (d.sc) {
                 let val = d.sc.val;
@@ -736,6 +814,7 @@
 
                 badge.className = `tb-badge tb-grade-${grd}`;
                 badge.innerHTML = `${grd} ${val}`;
+                badge.title = 'クリックで詳細レポートを表示';
 
                 const tags = this.translateTags(d.sc.why);
                 algoContainer.innerHTML = tags.map(t =>
@@ -749,10 +828,11 @@
             const reloadBtn = wrapper.querySelector('.tb-reload-mini');
             if (badge) {
                 badge.className = 'tb-badge tb-loading';
-                badge.innerText = '↻';
+                badge.innerText = '';
                 badge.style.background = '';
                 badge.style.color = '';
                 badge.style.borderColor = '';
+                badge.title = 'クリックで優先的に解析を開始します';
             }
             if (reloadBtn) {
                 reloadBtn.classList.add('spinning');
