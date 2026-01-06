@@ -9,6 +9,9 @@
 // @license      MIT
 // @match        https://www.amazon.co.jp/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=amazon.co.jp
+// @updateURL    https://github.com/koyasi777/amazon-review-trust-badge/raw/main/amazon-review-trust-badge.user.js
+// @downloadURL  https://github.com/koyasi777/amazon-review-trust-badge/raw/main/amazon-review-trust-badge.user.js
+// @supportURL   https://github.com/koyasi777/amazon-review-trust-badge/issues
 // @connect      amazon.co.jp
 // @connect      www.amazon.co.jp
 // @grant        GM.xmlHttpRequest
