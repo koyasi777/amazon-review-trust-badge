@@ -2,7 +2,7 @@
 // @name         Amazon Reviewer Trust Badge (Quality Check & Fake Detector)
 // @name:ja      Amazonレビュー信頼度判定バッジ (サクラ識別 & 品質チェック)
 // @namespace    https://github.com/koyasi777/amazon-review-trust-badge
-// @version      1.6.3
+// @version      1.6.4
 // @description  Visualizes the reliability of Amazon reviewers based on their review history. Detects suspicious behavior, bias, and low-quality reviews with a detailed trust score badge.
 // @description:ja Amazonのレビュアーの投稿履歴を分析し、信頼度を視覚化します。サクラやバイアス、低品質なレビューを検出し、S〜Dのランクでバッジ表示。詳細レポートで評価の偏りや文字数、写真投稿率などを確認できます。
 // @author       koyasi777
@@ -689,6 +689,9 @@
                             <div style="font-size: 24px; margin-bottom: 8px;">🔒</div>
                             <div style="font-weight:bold; font-size: 14px;">レビュー非表示</div>
                             <p style="font-size: 12px; color: #777; margin-top: 4px;">このユーザーはレビューの公開設定をオフにしています。</p>
+                            <div style="margin-top:8px">
+                                <a href="https://www.amazon.co.jp/gp/profile/${id}" target="_blank" rel="noopener noreferrer" style="font-size:11px; color:#007185; text-decoration:none; border-bottom:1px solid #007185;">プロフィールを確認 ↗</a>
+                            </div>
                             <div style="margin-top:15px"><button id="tb-reload-pop" class="tb-reload-btn">🔄 再確認</button></div>
                         </div>
                     `;
@@ -755,25 +758,45 @@
                     });
                 }
 
+                // プロフィールデータの準備
+                const pName = context.name || 'Unknown User';
+                const pImg = context.avatar || 'https://images-fe.ssl-images-amazon.com/images/S/amazon-avatars-global/default._CR0,0,1024,1024_SX48_.png';
+                // IDがあればリンク先を生成（src.urlがあればそれを使う）
+                const pLink = src.url || `https://www.amazon.co.jp/gp/profile/${id}`;
+
                 this.b.innerHTML = `
-                    ${alerts.join('')}
-                    <div class="tb-score-row">
-                        <span class="tb-grade-lg tb-grade-${finalGrade}" style="padding:4px 12px;border-radius:4px;border:1px solid currentcolor">${finalGrade}</span>
-                        <span class="tb-val-lg">${finalVal}<small>/100</small></span>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; padding-bottom:12px; border-bottom:1px dashed #eee;">
+                        <div class="tb-score-row" style="margin:0; flex-shrink:0; margin-right:12px;">
+                            <span class="tb-grade-lg tb-grade-${finalGrade}" style="padding:4px 10px; border-radius:4px; border:1px solid currentcolor; font-size:24px;">${finalGrade}</span>
+                            <span class="tb-val-lg" style="font-size:18px;">${finalVal}<small style="font-size:11px">/100</small></span>
+                        </div>
+                        <a href="${pLink}" target="_blank" rel="noopener noreferrer" style="display:flex; align-items:center; justify-content:flex-end; gap:10px; text-decoration:none; color:#333; flex:1; min-width:0; transition:opacity 0.2s;" title="プロフィールページを開く" onmouseover="this.style.opacity='0.7'" onmouseout="this.style.opacity='1'">
+                            <img src="${pImg}" style="width:30px; height:30px; border-radius:50%; object-fit:cover; border:1px solid #e2e8f0; flex-shrink:0;">
+                            <span style="font-size:12px; font-weight:bold; color:#007185; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${pName} ↗</span>
+                        </a>
                     </div>
+
+                    ${alerts.join('')}
                     ${unc ? `<div style="margin-bottom:10px">${unc}</div>` : ''}
-                    <div>
+
+                    <div style="margin-bottom:12px;">
                         ${tags.map(t => `<span class="tb-tag" style="${t.style}" data-tooltip="${t.desc}">${t.label}</span>`).join('')}
                     </div>
+
                     ${chartHtml}
+
                     <div class="tb-grid">
                         <div class="tb-item"><span class="tb-label">${L.CNT}</span><span class="tb-data">${st.cnt}件</span></div>
                         <div class="tb-item"><span class="tb-label">${L.LEN}</span><span class="tb-data">${Math.round(st.lenAvg)}文字</span></div>
                         <div class="tb-item"><span class="tb-label">${L.IMG}</span><span class="tb-data">${Math.round(st.imgR*100)}%</span></div>
                         <div class="tb-item"><span class="tb-label">${L.HELPFUL}</span><span class="tb-data">${Math.round(st.avgHelpful*10)/10}</span></div>
                     </div>
+
                     <div class="tb-meta">
-                        <div>Strat: ${src.type}<br>ID: ${id}</div>
+                        <div style="line-height:1.4; color:#999;">
+                            Strat: ${src.type}<br>
+                            ID: ${id}
+                        </div>
                         <button id="tb-reload-pop" class="tb-reload-btn">🔄 再取得</button>
                     </div>
                 `;
@@ -1251,7 +1274,17 @@
                             }
                         }
 
-                        this.ui.render(name.parentNode, m[0], { isVine, isVP });
+                        // プロフィール情報の取得
+                        const userName = name.textContent.trim();
+                        const imgNode = p.querySelector('.a-profile-avatar img');
+
+                        // data-srcを優先し、grey-pixel(読み込み前画像)を除外する
+                        let rawImg = (imgNode && (imgNode.getAttribute('data-src') || imgNode.getAttribute('src'))) || '';
+                        if (rawImg.includes('grey-pixel')) rawImg = ''; // プレースホルダーなら破棄
+
+                        const userImg = rawImg || 'https://images-fe.ssl-images-amazon.com/images/S/amazon-avatars-global/default._CR0,0,1024,1024_SX48_.png';
+
+                        this.ui.render(name.parentNode, m[0], { isVine, isVP, name: userName, avatar: userImg });
                     }
                 }
             });
