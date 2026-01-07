@@ -2,7 +2,7 @@
 // @name         Amazon Reviewer Trust Badge (Quality Check & Fake Detector)
 // @name:ja      Amazonレビュー信頼度判定バッジ (サクラ識別 & 品質チェック)
 // @namespace    https://github.com/koyasi777/amazon-review-trust-badge
-// @version      1.6.2
+// @version      1.6.3
 // @description  Visualizes the reliability of Amazon reviewers based on their review history. Detects suspicious behavior, bias, and low-quality reviews with a detailed trust score badge.
 // @description:ja Amazonのレビュアーの投稿履歴を分析し、信頼度を視覚化します。サクラやバイアス、低品質なレビューを検出し、S〜Dのランクでバッジ表示。詳細レポートで評価の偏りや文字数、写真投稿率などを確認できます。
 // @author       koyasi777
@@ -652,6 +652,13 @@
                 .tb-ctx-alert-vine { background: ${CONFIG.TEXT.CONTEXT.VINE.color}; border: 1px solid ${CONFIG.TEXT.CONTEXT.VINE.border}; color: ${CONFIG.TEXT.CONTEXT.VINE.text}; }
                 .tb-ctx-alert-non  { background: ${CONFIG.TEXT.CONTEXT.NON.color}; border: 1px solid ${CONFIG.TEXT.CONTEXT.NON.border}; color: ${CONFIG.TEXT.CONTEXT.NON.text}; }
                 details { margin-top: 10px; } summary { cursor: pointer; font-size: 10px; color: #007185; } pre { font-size: 10px; background: #333; color: #fff; padding: 8px; border-radius: 4px; overflow: auto; max-height: 150px; }
+                /* 分布グラフ用スタイル */
+                .tb-chart-box { margin: 12px 0; padding: 10px; background: #fcfcfc; border: 1px solid #f0f0f0; border-radius: 4px; }
+                .tb-chart-row { display: flex; align-items: center; font-size: 10px; margin-bottom: 3px; color: #555; }
+                .tb-chart-label { width: 20px; text-align: right; margin-right: 6px; font-family: monospace; }
+                .tb-bar-bg { flex: 1; height: 8px; background: #edf2f7; border-radius: 2px; overflow: hidden; }
+                .tb-bar-fill { height: 100%; background: #f0c14b; border-right: 1px solid #cd9042; }
+                .tb-chart-val { width: 30px; text-align: right; margin-left: 6px; color: #777; }
             `;
             document.head.appendChild(s);
         }
@@ -720,6 +727,18 @@
                 const L = CONFIG.TEXT.LABELS;
                 const unc = d.sc.uncertain ? `<span style="font-size:12px;color:#d69e2e;margin-left:8px">⚠️ ${L.UNCERTAIN}</span>` : '';
 
+                // ▼ 分布グラフ生成ロジック ▼
+                const dist = d.st.sDist;
+                const maxVal = Math.max(...dist.slice(1));
+                let chartHtml = '<div class="tb-chart-box"><div style="font-size:9px;color:#999;margin-bottom:4px">評価分布</div>';
+                for (let i = 5; i >= 1; i--) {
+                    const count = dist[i] || 0;
+                    const width = maxVal > 0 ? Math.round((count / maxVal) * 100) : 0;
+                    const barStyle = width === 0 ? 'width:0;border:none;' : `width:${width}%`;
+                    chartHtml += `<div class="tb-chart-row"><span class="tb-chart-label">${i}★</span><div class="tb-bar-bg"><div class="tb-bar-fill" style="${barStyle}"></div></div><span class="tb-chart-val">${count}</span></div>`;
+                }
+                chartHtml += '</div>';
+
                 const tags = this.translateTags(whyList);
 
                 let ctxConf = null;
@@ -746,6 +765,7 @@
                     <div>
                         ${tags.map(t => `<span class="tb-tag" style="${t.style}" data-tooltip="${t.desc}">${t.label}</span>`).join('')}
                     </div>
+                    ${chartHtml}
                     <div class="tb-grid">
                         <div class="tb-item"><span class="tb-label">${L.CNT}</span><span class="tb-data">${st.cnt}件</span></div>
                         <div class="tb-item"><span class="tb-label">${L.LEN}</span><span class="tb-data">${Math.round(st.lenAvg)}文字</span></div>
@@ -1218,7 +1238,7 @@
                             // ただし、レビュー本文(review-body)内の引用等は除外したいが、
                             // モバイルは構造がフラットなため、コンテナ全体のテキストから"Vine"関連の文言を探すのが最も確実。
                             // 誤爆を防ぐため、特定のクラス（緑色のテキストなど）を優先してチェックする。
-                            
+
                             const vineBadgeElement = reviewContainer.querySelector('.a-color-success'); // 緑色のテキスト
                             if (vineBadgeElement && (vineBadgeElement.textContent.includes('Vine') || vineBadgeElement.textContent.includes('無料'))) {
                                 isVine = true;
