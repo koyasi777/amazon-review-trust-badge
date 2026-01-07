@@ -2,7 +2,7 @@
 // @name         Amazon Reviewer Trust Badge (Quality Check & Fake Detector)
 // @name:ja      Amazonレビュー信頼度判定バッジ (サクラ識別 & 品質チェック)
 // @namespace    https://github.com/koyasi777/amazon-review-trust-badge
-// @version      1.5.0
+// @version      1.6.0
 // @description  Visualizes the reliability of Amazon reviewers based on their review history. Detects suspicious behavior, bias, and low-quality reviews with a detailed trust score badge.
 // @description:ja Amazonのレビュアーの投稿履歴を分析し、信頼度を視覚化します。サクラやバイアス、低品質なレビューを検出し、S〜Dのランクでバッジ表示。詳細レポートで評価の偏りや文字数、写真投稿率などを確認できます。
 // @author       koyasi777
@@ -427,41 +427,51 @@
     // 5. Filter Manager
     // =============================================================================
     class FilterManager {
-        static currentGrade = 'b'; // デフォルト値（読み込み完了までのフォールバック）
-        static STORAGE_KEY = 'tb_filter_grade_v2'; // 設定保存用のキー
+        static currentGrade = 'b';
+        static isIsActive = true;
+        static STORAGE_KEY_GRADE = 'tb_filter_grade_v2';
+        static STORAGE_KEY_IS = 'tb_infinite_scroll_active';
 
         static async init() {
-            // 1. 保存された設定を読み込む (非同期)
             try {
-                const saved = await GM.getValue(this.STORAGE_KEY, 'b');
-                // 念のため有効な値かチェック
-                if (['all', 's', 'a', 'b', 'c'].includes(saved)) {
-                    this.currentGrade = saved;
+                const savedGrade = await GM.getValue(this.STORAGE_KEY_GRADE, 'b');
+                if (['all', 's', 'a', 'b', 'c'].includes(savedGrade)) {
+                    this.currentGrade = savedGrade;
                 }
+                this.isIsActive = await GM.getValue(this.STORAGE_KEY_IS, true);
             } catch (e) {
-                console.error('TrustBadge: Failed to load filter settings', e);
+                console.error('TrustBadge: Failed to load settings', e);
             }
 
             this.injectCSS();
 
-            // 2. 設定読み込み後にUIループを開始
             setInterval(() => {
                 this.injectUI();
-                this.syncFilter(); // フィルタ状態を強制同期
+                this.syncFilter();
             }, 1000);
         }
 
         static injectCSS() {
             const s = document.createElement('style');
             s.textContent = `
-                /* 共通: フィルタが適用されたコンテナ内の該当グレードを非表示にする */
+                /* フィルタ用スタイル */
                 .tb-filter-s [data-tb-grade="A"], .tb-filter-s [data-tb-grade="B"], .tb-filter-s [data-tb-grade="C"], .tb-filter-s [data-tb-grade="D"], .tb-filter-s [data-tb-grade="ERR"] { display: none !important; }
                 .tb-filter-a [data-tb-grade="B"], .tb-filter-a [data-tb-grade="C"], .tb-filter-a [data-tb-grade="D"], .tb-filter-a [data-tb-grade="ERR"] { display: none !important; }
                 .tb-filter-b [data-tb-grade="C"], .tb-filter-b [data-tb-grade="D"], .tb-filter-b [data-tb-grade="ERR"] { display: none !important; }
                 .tb-filter-c [data-tb-grade="D"], .tb-filter-c [data-tb-grade="ERR"] { display: none !important; }
 
-                /* UI Styles */
-                .tb-filter-select-container { display: inline-block; margin-left: 10px; vertical-align: middle; position: relative; }
+                /* UI Row Style */
+                .tb-ui-row {
+                    clear: both;
+                    padding: 10px 0 5px 2px; /* 余白調整 */
+                    display: flex;
+                    align-items: center;
+                    gap: 20px;
+                    margin-bottom: 15px;
+                }
+
+                /* Dropdown UI */
+                .tb-filter-select-container { display: inline-flex; align-items: center; gap: 8px; position: relative; }
                 .tb-filter-select {
                     appearance: none; -moz-appearance: none; -webkit-appearance: none;
                     background: #f0f2f2; border: 1px solid #d5d9d9; border-radius: 8px;
@@ -475,85 +485,104 @@
                     position: absolute; right: 8px; top: 11px;
                     border: 4px solid transparent; border-top-color: #555; pointer-events: none;
                 }
+
+                /* Toggle Switch UI */
+                .tb-toggle-wrapper { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+                .tb-toggle-label { font-size: 11px; color: #333; font-weight: bold; }
+                .tb-toggle-input { display: none; }
+                .tb-toggle-bg {
+                    position: relative; width: 32px; height: 18px;
+                    background: #ccc; border-radius: 9px;
+                    transition: background 0.2s ease;
+                }
+                .tb-toggle-bg::after {
+                    content: ''; position: absolute; top: 2px; left: 2px;
+                    width: 14px; height: 14px; background: #fff; border-radius: 50%;
+                    transition: left 0.2s ease; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+                }
+                .tb-toggle-input:checked + .tb-toggle-bg { background: #007185; }
+                .tb-toggle-input:checked + .tb-toggle-bg::after { left: 16px; }
             `;
             document.head.appendChild(s);
         }
 
         static injectUI() {
             if (document.getElementById('tb-filter-ui')) {
-                // UIが既にある場合、外部要因で値が変わっている可能性を考慮して同期（念の為）
                 const select = document.getElementById('tb-grade-filter');
-                if (select && select.value !== this.currentGrade) {
-                    select.value = this.currentGrade;
-                }
+                if (select && select.value !== this.currentGrade) select.value = this.currentGrade;
                 return;
             }
 
-            const targetContainer = document.querySelector('.reviews-filter-by-dropdown, #cm_cr-view_opt_sort_filter .a-section.reviews-filter-by-options');
+            // ターゲットを cm_cr-view_opt_sort_filter に変更
+            const targetContainer = document.getElementById('cm_cr-view_opt_sort_filter');
             if (!targetContainer) return;
 
             const wrapper = document.createElement('div');
             wrapper.id = 'tb-filter-ui';
-            wrapper.className = 'tb-filter-select-container';
+            wrapper.className = 'tb-ui-row';
             wrapper.innerHTML = `
-                <div style="font-size:10px;color:#555;font-weight:bold;margin-bottom:2px;">信頼度で絞り込む</div>
-                <div style="position:relative">
-                    <select id="tb-grade-filter" class="tb-filter-select">
-                        <option value="all">全ての信頼度</option>
-                        <option value="s">S (最高品質) のみ</option>
-                        <option value="a">A (高品質) 以上</option>
-                        <option value="b">B (普通) 以上</option>
-                        <option value="c">C (低品質) 以上 (D除外)</option>
-                    </select>
-                    <i class="tb-arrow"></i>
+                <label class="tb-toggle-wrapper" title="自動で次のページを読み込みます">
+                    <span class="tb-toggle-label">無限スクロール</span>
+                    <input type="checkbox" id="tb-is-toggle" class="tb-toggle-input" ${this.isIsActive ? 'checked' : ''}>
+                    <div class="tb-toggle-bg"></div>
+                </label>
+
+                <div class="tb-filter-select-container">
+                    <div style="font-size:10px;color:#555;font-weight:bold;">信頼度:</div>
+                    <div style="position:relative">
+                        <select id="tb-grade-filter" class="tb-filter-select">
+                            <option value="all">全ての信頼度</option>
+                            <option value="s">S (最高品質) のみ</option>
+                            <option value="a">A (高品質) 以上</option>
+                            <option value="b">B (普通) 以上</option>
+                            <option value="c">C (低品質) 以上 (D除外)</option>
+                        </select>
+                        <i class="tb-arrow"></i>
+                    </div>
                 </div>
             `;
 
-            targetContainer.appendChild(wrapper);
+            // targetContainerの直後に挿入 (afterend)
+            targetContainer.insertAdjacentElement('afterend', wrapper);
 
             const select = document.getElementById('tb-grade-filter');
-            select.value = this.currentGrade; // 初期化済みの値をセット
-
-            // 即座に適用
+            select.value = this.currentGrade;
             this.applyFilter(this.currentGrade);
 
-            select.addEventListener('change', (e) => {
-                this.applyFilter(e.target.value);
-            });
-        }
+            select.addEventListener('change', (e) => this.applyFilter(e.target.value));
 
-        static syncFilter() {
-            // CSSクラスが剥がれている場合のみ再適用（DOM操作コスト削減）
-            const targets = document.querySelectorAll('#cm_cr-review_list, #amz-scroll-review-archive, #amz-scroll-internal-list');
-            const cls = `tb-filter-${this.currentGrade}`;
-
-            // どれか一つでもクラスが欠けていれば再適用
-            let needsUpdate = false;
-            targets.forEach(t => {
-                if (this.currentGrade !== 'all' && !t.classList.contains(cls)) {
-                    needsUpdate = true;
+            const toggle = document.getElementById('tb-is-toggle');
+            toggle.addEventListener('change', async (e) => {
+                const isActive = e.target.checked;
+                this.isIsActive = isActive;
+                await GM.setValue(this.STORAGE_KEY_IS, isActive);
+                if (typeof IS_Logic !== 'undefined') {
+                    IS_Logic.toggle(isActive);
                 }
             });
 
-            if (needsUpdate) {
-                this.applyFilter(this.currentGrade);
-            }
+            setTimeout(() => {
+                 if (typeof IS_Logic !== 'undefined') IS_Logic.toggle(this.isIsActive);
+            }, 500);
+        }
+
+        static syncFilter() {
+            const targets = document.querySelectorAll('#cm_cr-review_list, #amz-scroll-review-archive, #amz-scroll-internal-list');
+            const cls = `tb-filter-${this.currentGrade}`;
+            let needsUpdate = false;
+            targets.forEach(t => {
+                if (this.currentGrade !== 'all' && !t.classList.contains(cls)) needsUpdate = true;
+            });
+            if (needsUpdate) this.applyFilter(this.currentGrade);
         }
 
         static async applyFilter(gradeKey) {
             this.currentGrade = gradeKey;
-
-            // 3. 値の変更を保存 (非同期)
-            GM.setValue(this.STORAGE_KEY, gradeKey).catch(e => console.error(e));
-
+            GM.setValue(this.STORAGE_KEY_GRADE, gradeKey).catch(e => console.error(e));
             const targets = document.querySelectorAll('#cm_cr-review_list, #amz-scroll-review-archive, #amz-scroll-internal-list');
-
             targets.forEach(listContainer => {
                 listContainer.classList.remove('tb-filter-s', 'tb-filter-a', 'tb-filter-b', 'tb-filter-c');
-
-                if (gradeKey !== 'all') {
-                    listContainer.classList.add(`tb-filter-${gradeKey}`);
-                }
+                if (gradeKey !== 'all') listContainer.classList.add(`tb-filter-${gradeKey}`);
             });
         }
     }
@@ -861,7 +890,209 @@
     }
 
     // =============================================================================
-    // 7. Main App
+    // 7. Infinite Scroll Manager
+    // =============================================================================
+    const IS_CONFIG = {
+        TRIGGER_DISTANCE: 1500,
+        LIST_ID: 'cm_cr-review_list',
+        ARCHIVE_ID: 'amz-scroll-review-archive',
+        ARCHIVE_LIST_CLASS: 'a-unordered-list a-nostyle a-vertical',
+        NEXT_BTN_SELECTOR: '.a-pagination li.a-last a, #cm_cr-pagination_bar li.a-last a',
+        HEADER_SELECTOR: '[data-hook="arp-local-reviews-header"]'
+    };
+
+    const IS_State = {
+        enabled: true, // Master Switch
+        isLoading: false,
+        scrollLockId: null,
+        targetScrollY: 0,
+        nativeScrollTo: window.scrollTo,
+        observer: null
+    };
+
+    const IS_UI = {
+        setupArchive: () => {
+            const list = document.getElementById(IS_CONFIG.LIST_ID);
+            if (!list || document.getElementById(IS_CONFIG.ARCHIVE_ID)) return;
+            const archive = document.createElement('div');
+            archive.id = IS_CONFIG.ARCHIVE_ID;
+            const ul = document.createElement('ul');
+            ul.className = IS_CONFIG.ARCHIVE_LIST_CLASS;
+            ul.id = 'amz-scroll-internal-list';
+            archive.appendChild(ul);
+            list.parentNode.insertBefore(archive, list);
+        },
+        destroyArchive: () => {
+            // アーカイブは破壊せず、ローダーのみ除去 (ユーザー体験維持のため)
+            const loader = document.getElementById('amz-scroll-native-loader');
+            if (loader) loader.remove();
+        },
+        cleanUpHeaders: () => {
+            const headers = document.querySelectorAll(IS_CONFIG.HEADER_SELECTOR);
+            if (headers.length > 1) {
+                for (let i = 1; i < headers.length; i++) headers[i].remove();
+            }
+        },
+        moveToArchive: () => {
+            const list = document.getElementById(IS_CONFIG.LIST_ID);
+            const archive = document.getElementById(IS_CONFIG.ARCHIVE_ID);
+            const internalUl = document.getElementById('amz-scroll-internal-list');
+            if (!list || !archive || !internalUl) return;
+            IS_UI.cleanUpHeaders();
+            const header = document.querySelector(IS_CONFIG.HEADER_SELECTOR);
+            if (header && !archive.contains(header)) archive.insertBefore(header, internalUl);
+            let reviews = list.querySelectorAll('li[data-hook="review"]');
+            if (reviews.length === 0) reviews = list.querySelectorAll('div.review');
+            reviews.forEach(review => {
+                review.classList.add('a-spacing-large');
+                internalUl.appendChild(review);
+            });
+        },
+        createLoader: () => {
+            const list = document.getElementById(IS_CONFIG.LIST_ID);
+            const old = document.getElementById('amz-scroll-native-loader');
+            if (old) old.remove();
+            const loader = document.createElement('div');
+            loader.id = 'amz-scroll-native-loader';
+            loader.style.cssText = 'text-align: center; padding: 20px; background: #fff; color: #777; font-size: 13px; border-radius: 4px; margin-bottom: 20px; clear: both;';
+            loader.innerHTML = '<span class="a-spinner-medium"></span> 次のレビューを読み込んでいます...';
+            list.appendChild(loader);
+        }
+    };
+
+    const IS_Logic = {
+        toggle(enable) {
+            IS_State.enabled = enable;
+            if (enable) document.body.classList.add('tb-is-active');
+            else document.body.classList.remove('tb-is-active');
+            if (enable) {
+                this.startMainListObserver();
+                // 即座にセットアップが必要か確認
+                if (!document.getElementById(IS_CONFIG.ARCHIVE_ID)) IS_UI.setupArchive();
+            } else {
+                this.disconnect();
+            }
+        },
+
+        disconnect() {
+            if (IS_State.observer) {
+                IS_State.observer.disconnect();
+                IS_State.observer = null;
+            }
+        },
+
+        startMainListObserver: () => {
+            if (!IS_State.enabled) return;
+            const list = document.getElementById(IS_CONFIG.LIST_ID);
+            if (!list) return;
+            if (IS_State.observer) IS_State.observer.disconnect();
+
+            IS_State.observer = new MutationObserver((mutations) => {
+                if (!IS_State.enabled) return;
+                let nodesAdded = false;
+                for (const mutation of mutations) {
+                    if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                        const hasElement = Array.from(mutation.addedNodes).some(node => node.nodeType === 1);
+                        if (hasElement) { nodesAdded = true; break; }
+                    }
+                }
+                if (nodesAdded) {
+                    if (IS_State.isLoading) {
+                        setTimeout(() => {
+                            IS_State.isLoading = false;
+                            const loader = document.getElementById('amz-scroll-native-loader');
+                            if (loader) loader.remove();
+                            IS_Logic.stopGravityAnchor();
+                            IS_UI.cleanUpHeaders();
+                        }, 800);
+                    } else {
+                        // フィルタ変更等によるリスト更新時
+                        const archive = document.getElementById(IS_CONFIG.ARCHIVE_ID);
+                        if (archive) archive.remove(); // リセット
+                        IS_UI.setupArchive();
+                        setTimeout(IS_UI.cleanUpHeaders, 100);
+                    }
+                }
+            });
+            IS_State.observer.observe(list, { childList: true, subtree: false });
+        },
+
+        startGravityAnchor: () => {
+            if (IS_State.scrollLockId) return;
+            IS_State.targetScrollY = window.scrollY || document.documentElement.scrollTop;
+            const lockLoop = () => {
+                IS_State.nativeScrollTo.call(window, 0, IS_State.targetScrollY);
+                IS_State.scrollLockId = requestAnimationFrame(lockLoop);
+            };
+            IS_State.scrollLockId = requestAnimationFrame(lockLoop);
+        },
+
+        stopGravityAnchor: () => {
+            if (IS_State.scrollLockId) {
+                cancelAnimationFrame(IS_State.scrollLockId);
+                IS_State.scrollLockId = null;
+            }
+        },
+
+        clickNextPage: () => {
+            if (!IS_State.enabled || IS_State.isLoading) return;
+            const nextBtn = document.querySelector(IS_CONFIG.NEXT_BTN_SELECTOR);
+            if (!nextBtn) return;
+
+            IS_State.isLoading = true;
+            IS_Logic.startGravityAnchor();
+            IS_UI.moveToArchive();
+            IS_UI.createLoader();
+            nextBtn.click();
+
+            // タイムアウト保護
+            setTimeout(() => {
+                if (IS_State.isLoading) {
+                    IS_State.isLoading = false;
+                    IS_Logic.stopGravityAnchor();
+                    const loader = document.getElementById('amz-scroll-native-loader');
+                    if (loader) loader.remove();
+                }
+            }, 10000);
+        }
+    };
+
+    const initInfiniteScroll = () => {
+        if (!location.href.match(/\/product-reviews\/([A-Z0-9]{10})/) && !document.getElementById('ASIN')) return;
+
+        // CSS Injection
+        if (!document.getElementById('amz-scroll-style')) {
+            const style = document.createElement('style');
+            style.id = 'amz-scroll-style';
+            style.textContent = `
+                body.tb-is-active #cm_cr-pagination_bar { opacity: 0; height: 1px; overflow: hidden; pointer-events: none; }
+                #amz-scroll-review-archive { margin-bottom: 0; padding: 0; }
+                #cm_cr-review_list li[data-hook="review"],
+                #amz-scroll-review-archive li[data-hook="review"] { list-style: none !important; margin-left: 0 !important; padding-left: 0 !important; }
+                [data-hook="arp-local-reviews-header"] { margin-top: 20px; margin-bottom: 10px; font-weight: bold; font-size: 18px; }
+                [data-hook="arp-local-reviews-header"] ~ [data-hook="arp-local-reviews-header"] { display: none !important; }
+            `;
+            document.head.appendChild(style);
+        }
+
+        // 初期化は FilterManager からのトグル同期で行われるため、ここではセットアップのみ
+        IS_UI.setupArchive();
+
+        window.addEventListener('scroll', () => {
+            if (!IS_State.enabled || IS_State.isLoading) return;
+            const scrollTop = window.scrollY || document.documentElement.scrollTop;
+            const windowHeight = window.innerHeight;
+            const docHeight = document.documentElement.scrollHeight;
+            const scrollBottom = docHeight - (scrollTop + windowHeight);
+
+            if (scrollBottom < IS_CONFIG.TRIGGER_DISTANCE) {
+                IS_Logic.clickNextPage();
+            }
+        });
+    };
+
+    // =============================================================================
+    // 8. Main App
     // =============================================================================
     const App = {
         ui: new UIManager(),
@@ -870,6 +1101,8 @@
         init() {
             // FilterManagerを初期化
             FilterManager.init();
+
+            initInfiniteScroll();
 
             this.observer = new IntersectionObserver((entries) => {
                 entries.forEach(entry => {
