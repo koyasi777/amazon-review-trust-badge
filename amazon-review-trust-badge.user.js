@@ -2,7 +2,7 @@
 // @name         Amazon Reviewer Trust Badge (Quality Check & Fake Detector)
 // @name:ja      Amazonレビュー信頼度判定バッジ (サクラ識別 & 品質チェック)
 // @namespace    https://github.com/koyasi777/amazon-review-trust-badge
-// @version      1.0.2
+// @version      1.0.3
 // @description  Visualizes the reliability of Amazon reviewers based on their review history. Detects suspicious behavior, bias, and low-quality reviews with a detailed trust score badge.
 // @description:ja Amazonのレビュアーの投稿履歴を分析し、信頼度を視覚化します。サクラやバイアス、低品質なレビューを検出し、S〜Dのランクでバッジ表示。詳細レポートで評価の偏りや文字数、写真投稿率などを確認できます。
 // @author       koyasi777
@@ -860,8 +860,17 @@
                 });
             }, { rootMargin: '50px' });
 
-            const obs = new MutationObserver(m => { if(m.some(x=>x.addedNodes.length)) this.scan(); });
-            obs.observe(document.body, {childList:true, subtree:true});
+            let debounceTimer;
+            const obs = new MutationObserver(m => {
+                if (m.some(x => x.addedNodes.length)) {
+                    // 連続した変更検知時はタイマーをリセットし、処理を先送りする
+                    clearTimeout(debounceTimer);
+                    // 500ms待機することで、無限スクロールの処理完了を待ってから解析を行う
+                    debounceTimer = setTimeout(() => this.scan(), 500);
+                }
+            });
+            obs.observe(document.body, { childList: true, subtree: true });
+
             this.scan();
         },
 
