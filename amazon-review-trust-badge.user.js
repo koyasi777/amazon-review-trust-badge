@@ -2,7 +2,7 @@
 // @name         Amazon Reviewer Trust Badge (Quality Check & Fake Detector)
 // @name:ja      Amazonレビュー信頼度判定バッジ (サクラ識別 & 品質チェック)
 // @namespace    https://github.com/koyasi777/amazon-review-trust-badge
-// @version      1.0.3
+// @version      1.5.0
 // @description  Visualizes the reliability of Amazon reviewers based on their review history. Detects suspicious behavior, bias, and low-quality reviews with a detailed trust score badge.
 // @description:ja Amazonのレビュアーの投稿履歴を分析し、信頼度を視覚化します。サクラやバイアス、低品質なレビューを検出し、S〜Dのランクでバッジ表示。詳細レポートで評価の偏りや文字数、写真投稿率などを確認できます。
 // @author       koyasi777
@@ -31,7 +31,7 @@
     // =============================================================================
     const CONFIG = {
         APP_NAME: 'TrustBadge',
-        VERSION: '4.0.5',
+        VERSION: '1.5.0',
         CACHE: { PREFIX: 'tr4:', TTL_SUCCESS: 604800000, TTL_FAIL: 86400000 },
         NETWORK: {
             MIN_INTERVAL: 2500,
@@ -123,10 +123,8 @@
             return new Promise((resolve, reject) => {
                 const item = { url, resolve, reject };
                 if (priority) {
-                    // 優先の場合は先頭に割り込み(unshift)
                     this.queue.unshift(item);
                 } else {
-                    // 通常(自動)は最後尾に追加
                     this.queue.push(item);
                 }
                 this.processQueue();
@@ -184,7 +182,7 @@
     }
 
     // =============================================================================
-    // 3. Parser (Modified for Hidden Reviews)
+    // 3. Parser
     // =============================================================================
     class Parser {
         static parse(html) {
@@ -317,7 +315,7 @@
     }
 
     // =============================================================================
-    // 4. Scorer (Optimized for v4.0.5)
+    // 4. Scorer
     // =============================================================================
     class Scorer {
         static analyze(reviews, globalImageCount = 0) {
@@ -330,19 +328,15 @@
             let shortLenCnt = 0;
             const domImageDetected = reviews.some(r => r.hasImage);
 
-            // ▼▼▼ Gold判定用変数 ▼▼▼
             let goldHelpfulSum = 0;
             let goldReviewCnt = 0;
-
-            // ▼▼▼ ギャップ検知用の配列 ▼▼▼
-            const targetReviews = []; // ★5
-            const camoReviews = [];   // ★2-4
+            const targetReviews = [];
+            const camoReviews = [];
 
             reviews.forEach(r => {
                 const s = (typeof r.star === 'number') ? r.star : 3;
                 stats.sDist[s]++; sumS+=s;
 
-                // グルーピング
                 if (s === 5) targetReviews.push(r);
                 else if (s >= 2 && s <= 4) camoReviews.push(r);
 
@@ -356,7 +350,6 @@
 
                 if (!r.hasImage && len < 40 && h >= 3) suspiciousHelpfulCount++;
 
-                // ▼▼▼ Gold集計ロジック (対象: ★2-4 かつ 150文字超) ▼▼▼
                 if ((s >= 2 && s <= 4) && len >= 150) {
                     if (h >= 3) goldReviewCnt++;
                     if (h >= 1) goldHelpfulSum += h;
@@ -372,12 +365,10 @@
             else stats.imgR = 0;
 
             stats.flags.allFive = (stats.sDist[5] === stats.cnt);
-            // 修正: 2件以上中間評価があって初めてDiverseとみなす
             stats.flags.diverse = (stats.sDist[2]+stats.sDist[3]+stats.sDist[4]) >= 2;
             stats.flags.thin = (stats.lenAvg > 0 && stats.lenAvg < 40) || (shortLenCnt >= 2);
             stats.flags.swarm = suspiciousHelpfulCount >= 2;
 
-            // ▼▼▼ ギャップ判定ロジック ▼▼▼
             stats.flags.gap = false;
             if (targetReviews.length > 0 && camoReviews.length > 0) {
                 const avgCamoLen = camoReviews.reduce((a,b)=>a+b.len,0) / camoReviews.length;
@@ -403,7 +394,6 @@
             if (stats.imgR >= 0.1) { sc += R.BONUS.IMAGE; why.push('Img'); }
 
             if (!stats.flags.swarm) {
-                // ▼▼▼ Goldボーナス算出ロジック ▼▼▼
                 if ((goldReviewCnt > 0 || goldHelpfulSum > 0) && !stats.flags.gap) {
                     const countScore = goldReviewCnt * 1.5;
                     const voteScore = Math.log2(goldHelpfulSum + 1) * 2.0;
@@ -412,7 +402,6 @@
                     if (goldBonus >= 3) why.push('Gold');
                 }
 
-                // Helpfulボーナス
                 if (stats.avgHelpful > 0) {
                     const hBonus = Math.min(R.BONUS.HELPFUL_MAX, Math.round(Math.log2(stats.avgHelpful + 1) * 2.5));
                     sc += hBonus;
@@ -435,99 +424,168 @@
     }
 
     // =============================================================================
-    // 5. UI Manager (Clickable Tags & Reports)
+    // 5. Filter Manager
+    // =============================================================================
+    class FilterManager {
+        static currentGrade = 'b'; // デフォルト値（読み込み完了までのフォールバック）
+        static STORAGE_KEY = 'tb_filter_grade_v2'; // 設定保存用のキー
+
+        static async init() {
+            // 1. 保存された設定を読み込む (非同期)
+            try {
+                const saved = await GM.getValue(this.STORAGE_KEY, 'b');
+                // 念のため有効な値かチェック
+                if (['all', 's', 'a', 'b', 'c'].includes(saved)) {
+                    this.currentGrade = saved;
+                }
+            } catch (e) {
+                console.error('TrustBadge: Failed to load filter settings', e);
+            }
+
+            this.injectCSS();
+
+            // 2. 設定読み込み後にUIループを開始
+            setInterval(() => {
+                this.injectUI();
+                this.syncFilter(); // フィルタ状態を強制同期
+            }, 1000);
+        }
+
+        static injectCSS() {
+            const s = document.createElement('style');
+            s.textContent = `
+                /* 共通: フィルタが適用されたコンテナ内の該当グレードを非表示にする */
+                .tb-filter-s [data-tb-grade="A"], .tb-filter-s [data-tb-grade="B"], .tb-filter-s [data-tb-grade="C"], .tb-filter-s [data-tb-grade="D"], .tb-filter-s [data-tb-grade="ERR"] { display: none !important; }
+                .tb-filter-a [data-tb-grade="B"], .tb-filter-a [data-tb-grade="C"], .tb-filter-a [data-tb-grade="D"], .tb-filter-a [data-tb-grade="ERR"] { display: none !important; }
+                .tb-filter-b [data-tb-grade="C"], .tb-filter-b [data-tb-grade="D"], .tb-filter-b [data-tb-grade="ERR"] { display: none !important; }
+                .tb-filter-c [data-tb-grade="D"], .tb-filter-c [data-tb-grade="ERR"] { display: none !important; }
+
+                /* UI Styles */
+                .tb-filter-select-container { display: inline-block; margin-left: 10px; vertical-align: middle; position: relative; }
+                .tb-filter-select {
+                    appearance: none; -moz-appearance: none; -webkit-appearance: none;
+                    background: #f0f2f2; border: 1px solid #d5d9d9; border-radius: 8px;
+                    box-shadow: 0 2px 5px rgba(213,217,217,.5); padding: 0 22px 0 11px;
+                    height: 29px; font-size: 11px; line-height: 29px; color: #111;
+                    cursor: pointer; outline: 0; min-width: 140px;
+                }
+                .tb-filter-select:hover { background: #e3e6e6; }
+                .tb-filter-select:focus { background: #e7f4f5; border-color: #007185; box-shadow: 0 0 0 3px #c2dbdf; }
+                .tb-arrow {
+                    position: absolute; right: 8px; top: 11px;
+                    border: 4px solid transparent; border-top-color: #555; pointer-events: none;
+                }
+            `;
+            document.head.appendChild(s);
+        }
+
+        static injectUI() {
+            if (document.getElementById('tb-filter-ui')) {
+                // UIが既にある場合、外部要因で値が変わっている可能性を考慮して同期（念の為）
+                const select = document.getElementById('tb-grade-filter');
+                if (select && select.value !== this.currentGrade) {
+                    select.value = this.currentGrade;
+                }
+                return;
+            }
+
+            const targetContainer = document.querySelector('.reviews-filter-by-dropdown, #cm_cr-view_opt_sort_filter .a-section.reviews-filter-by-options');
+            if (!targetContainer) return;
+
+            const wrapper = document.createElement('div');
+            wrapper.id = 'tb-filter-ui';
+            wrapper.className = 'tb-filter-select-container';
+            wrapper.innerHTML = `
+                <div style="font-size:10px;color:#555;font-weight:bold;margin-bottom:2px;">信頼度で絞り込む</div>
+                <div style="position:relative">
+                    <select id="tb-grade-filter" class="tb-filter-select">
+                        <option value="all">全ての信頼度</option>
+                        <option value="s">S (最高品質) のみ</option>
+                        <option value="a">A (高品質) 以上</option>
+                        <option value="b">B (普通) 以上</option>
+                        <option value="c">C (低品質) 以上 (D除外)</option>
+                    </select>
+                    <i class="tb-arrow"></i>
+                </div>
+            `;
+
+            targetContainer.appendChild(wrapper);
+
+            const select = document.getElementById('tb-grade-filter');
+            select.value = this.currentGrade; // 初期化済みの値をセット
+
+            // 即座に適用
+            this.applyFilter(this.currentGrade);
+
+            select.addEventListener('change', (e) => {
+                this.applyFilter(e.target.value);
+            });
+        }
+
+        static syncFilter() {
+            // CSSクラスが剥がれている場合のみ再適用（DOM操作コスト削減）
+            const targets = document.querySelectorAll('#cm_cr-review_list, #amz-scroll-review-archive, #amz-scroll-internal-list');
+            const cls = `tb-filter-${this.currentGrade}`;
+
+            // どれか一つでもクラスが欠けていれば再適用
+            let needsUpdate = false;
+            targets.forEach(t => {
+                if (this.currentGrade !== 'all' && !t.classList.contains(cls)) {
+                    needsUpdate = true;
+                }
+            });
+
+            if (needsUpdate) {
+                this.applyFilter(this.currentGrade);
+            }
+        }
+
+        static async applyFilter(gradeKey) {
+            this.currentGrade = gradeKey;
+
+            // 3. 値の変更を保存 (非同期)
+            GM.setValue(this.STORAGE_KEY, gradeKey).catch(e => console.error(e));
+
+            const targets = document.querySelectorAll('#cm_cr-review_list, #amz-scroll-review-archive, #amz-scroll-internal-list');
+
+            targets.forEach(listContainer => {
+                listContainer.classList.remove('tb-filter-s', 'tb-filter-a', 'tb-filter-b', 'tb-filter-c');
+
+                if (gradeKey !== 'all') {
+                    listContainer.classList.add(`tb-filter-${gradeKey}`);
+                }
+            });
+        }
+    }
+
+    // =============================================================================
+    // 6. UI Manager
     // =============================================================================
     class UIManager {
         constructor() {
             this.createOverlay();
             const s = document.createElement('style');
             s.textContent = `
-                /* ベーススタイル */
                 .tb-wrapper { display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; margin-left: 8px; font-family: "Amazon Ember", Arial, sans-serif; line-height:1; }
-
-                /* バッジの基本形状 */
-                .tb-badge {
-                    padding: 3px 8px;
-                    border-radius: 12px;
-                    font-size: 11px;
-                    font-weight: 700;
-                    cursor: pointer;
-                    border: 1px solid transparent;
-                    color: #555;
-                    user-select: none;
-                    transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
-                    white-space: nowrap;
-                    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-                    display: inline-flex;
-                    align-items: center;
-                    gap: 4px;
-                    background: #fdfdfd;
-                    border-color: #e2e8f0;
-                }
-
+                .tb-badge { padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 700; cursor: pointer; border: 1px solid transparent; color: #555; user-select: none; transition: all 0.2s; white-space: nowrap; box-shadow: 0 1px 2px rgba(0,0,0,0.05); display: inline-flex; align-items: center; gap: 4px; background: #fdfdfd; border-color: #e2e8f0; }
                 .tb-badge:hover { transform: translateY(-1px); box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-
-                /* --- 状態: 待機中 (Queue) --- */
-                .tb-queue {
-                    background: #f7fafc;
-                    color: #718096;
-                    border-color: #cbd5e0;
-                    animation: tb-breath 2s infinite ease-in-out;
-                }
-                .tb-queue::before {
-                    content: "⏱";
-                    font-size: 11px;
-                    opacity: 0.8;
-                }
-                .tb-queue::after {
-                    content: "待機中";
-                    font-size: 10px;
-                    margin-left: 4px;
-                    opacity: 0.8;
-                }
-
-                /* ホバーで「Boost」モードへ変身 */
-                .tb-queue:hover {
-                    background: #fffaf0;
-                    border-color: #fbd38d;
-                    color: #c05621;
-                    animation: none;
-                    transform: translateY(-2px) scale(1.05);
-                    box-shadow: 0 4px 12px rgba(237, 137, 54, 0.25);
-                }
+                .tb-queue { background: #f7fafc; color: #718096; border-color: #cbd5e0; animation: tb-breath 2s infinite ease-in-out; }
+                .tb-queue::before { content: "⏱"; font-size: 11px; opacity: 0.8; }
+                .tb-queue::after { content: "待機中"; font-size: 10px; margin-left: 4px; opacity: 0.8; }
+                .tb-queue:hover { background: #fffaf0; border-color: #fbd38d; color: #c05621; animation: none; transform: translateY(-2px) scale(1.05); box-shadow: 0 4px 12px rgba(237, 137, 54, 0.25); }
                 .tb-queue:hover::before { content: "⚡"; }
                 .tb-queue:hover::after { content: "今すぐ解析"; font-weight: bold; }
-
-                /* --- 状態: ロード中 (Processing) --- */
-                .tb-loading {
-                    background: #ebf8ff;
-                    border-color: #90cdf4;
-                    color: #2b6cb0;
-                    cursor: pointer; /* 変更: wait -> pointer */
-                }
-                .tb-loading::before {
-                    content: "↻";
-                    display: inline-block;
-                    animation: tb-spin 0.8s linear infinite;
-                    font-size: 12px;
-                }
-                .tb-loading::after {
-                    content: "解析中...";
-                    font-size: 10px;
-                    margin-left: 4px;
-                }
-
+                .tb-loading { background: #ebf8ff; border-color: #90cdf4; color: #2b6cb0; cursor: pointer; }
+                .tb-loading::before { content: "↻"; display: inline-block; animation: tb-spin 0.8s linear infinite; font-size: 12px; }
+                .tb-loading::after { content: "解析中..."; font-size: 10px; margin-left: 4px; }
                 .tb-error { background: #fff5f5; border-color: #fc8181; color: #c53030; }
                 .tb-grade-S { background: #c6f6d5; border-color: #48bb78; color: #22543d; }
                 .tb-grade-A { background: #f0fff4; border-color: #9ae6b4; color: #276749; }
                 .tb-grade-B { background: #fffff0; border-color: #fbd38d; color: #744210; }
                 .tb-grade-C { background: #fffaf0; border-color: #f6ad55; color: #9c4221; }
                 .tb-grade-D { background: #fff5f5; border-color: #fc8181; color: #9b2c2c; }
-
                 @keyframes tb-breath { 0%{border-color:#cbd5e0;} 50%{border-color:#a0aec0; background:#edf2f7;} 100%{border-color:#cbd5e0;} }
                 @keyframes tb-spin  { 100% { transform: rotate(360deg); } }
-                @keyframes tb-pulse { 0%{opacity:1;} 50%{opacity:0.5;} 100%{opacity:1;} }
-
                 .tb-tags-container { display: inline-flex; gap: 2px; cursor: pointer; }
                 .tb-tag-inline { font-size: 9px; padding: 1px 4px; border-radius: 3px; border: 1px solid; cursor: pointer; white-space: nowrap; transition: opacity 0.2s; }
                 .tb-tag-inline:hover { opacity: 0.8; }
@@ -539,7 +597,6 @@
                 .tb-reload-mini:hover { color: #333; background: #f0f0f0; }
                 .tb-reload-mini.act { display: inline-block; }
                 .tb-reload-mini.spinning { animation: tb-spin 0.8s linear infinite; pointer-events: none; color: #ccc; }
-
                 #tb-pop { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 9999; display: none; align-items: center; justify-content: center; }
                 #tb-pop.act { display: flex; }
                 .tb-win { background: #fff; width: 95%; max-width: 420px; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); font-family: "Amazon Ember", sans-serif; position: relative; }
@@ -549,53 +606,9 @@
                 .tb-grade-lg { font-size: 32px; font-weight: bold; line-height: 1; }
                 .tb-val-lg { font-size: 20px; color: #555; }
                 .tb-tag { display: inline-block; background: #eee; padding: 2px 8px; border-radius: 12px; margin: 0 4px 4px 0; font-size: 11px; color: #555; position: relative; cursor: help; }
-
-                /* Tooltip CSS */
-                .tb-tag::before {
-                    content: attr(data-tooltip);
-                    position: absolute;
-                    bottom: 100%;
-                    left: 50%;
-                    transform: translateX(-50%) translateY(-5px);
-                    padding: 8px 12px;
-                    background: #2d3748;
-                    color: #fff;
-                    font-size: 11px;
-                    line-height: 1.4;
-                    border-radius: 4px;
-                    white-space: normal;
-                    width: max-content;
-                    max-width: 240px;
-                    text-align: left;
-                    opacity: 0;
-                    visibility: hidden;
-                    transition: opacity 0.2s, transform 0.2s;
-                    pointer-events: none;
-                    z-index: 10000;
-                    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-                    font-weight: normal;
-                }
-                .tb-tag::after {
-                    content: '';
-                    position: absolute;
-                    bottom: 100%;
-                    left: 50%;
-                    margin-bottom: -5px;
-                    transform: translateX(-50%) translateY(-5px);
-                    border-width: 5px;
-                    border-style: solid;
-                    border-color: #2d3748 transparent transparent transparent;
-                    opacity: 0;
-                    visibility: hidden;
-                    transition: opacity 0.2s, transform 0.2s;
-                    z-index: 10000;
-                }
-                .tb-tag:hover::before, .tb-tag:hover::after {
-                    opacity: 1;
-                    visibility: visible;
-                    transform: translateX(-50%) translateY(-10px);
-                }
-
+                .tb-tag::before { content: attr(data-tooltip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%) translateY(-5px); padding: 8px 12px; background: #2d3748; color: #fff; font-size: 11px; line-height: 1.4; border-radius: 4px; white-space: normal; width: max-content; max-width: 240px; text-align: left; opacity: 0; visibility: hidden; transition: opacity 0.2s, transform 0.2s; pointer-events: none; z-index: 10000; box-shadow: 0 4px 10px rgba(0,0,0,0.2); font-weight: normal; }
+                .tb-tag::after { content: ''; position: absolute; bottom: 100%; left: 50%; margin-bottom: -5px; transform: translateX(-50%) translateY(-5px); border-width: 5px; border-style: solid; border-color: #2d3748 transparent transparent transparent; opacity: 0; visibility: hidden; transition: opacity 0.2s, transform 0.2s; z-index: 10000; }
+                .tb-tag:hover::before, .tb-tag:hover::after { opacity: 1; visibility: visible; transform: translateX(-50%) translateY(-10px); }
                 .tb-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; padding-top: 16px; border-top: 1px solid #eee; }
                 .tb-item { display: flex; justify-content: space-between; }
                 .tb-label { color: #666; } .tb-data { font-weight: bold; }
@@ -734,7 +747,6 @@
                 } else {
                     this.load(wrapper);
                     App.observer.unobserve(wrapper);
-                    // ここで true を渡すことで「割り込み」を指示
                     await App.run(id, wrapper, currentCtx, true);
                 }
             };
@@ -783,12 +795,17 @@
             const algoContainer = wrapper.querySelector('.tb-algo-tags');
             const reloadBtn = wrapper.querySelector('.tb-reload-mini');
 
+            // 余白問題を解決するため、ラッパーの親（リストアイテム自体）を探す
+            // data-hook="review" が付いている要素がリストのルート要素であることが多い
+            const reviewContainer = wrapper.closest('[data-hook="review"]') || wrapper.closest('.review, .review-card, .celwidget');
+
             if (reloadBtn) {
                 reloadBtn.classList.remove('spinning');
                 reloadBtn.classList.add('act');
             }
 
             if (d.err) {
+                if (reviewContainer) reviewContainer.setAttribute('data-tb-grade', 'ERR');
                 if (d.err.type === 'HIDDEN') {
                     badge.className = 'tb-badge';
                     badge.style.background = '#f3f4f6';
@@ -811,6 +828,9 @@
 
                 val = Math.min(100, Math.max(0, val));
                 const grd = Scorer.getGrade(val);
+
+                // 親コンテナにグレードを設定（CSSでフィルタリングするため）
+                if (reviewContainer) reviewContainer.setAttribute('data-tb-grade', grd);
 
                 badge.className = `tb-badge tb-grade-${grd}`;
                 badge.innerHTML = `${grd} ${val}`;
@@ -841,13 +861,16 @@
     }
 
     // =============================================================================
-    // 6. Main App
+    // 7. Main App
     // =============================================================================
     const App = {
         ui: new UIManager(),
         observer: null,
 
         init() {
+            // FilterManagerを初期化
+            FilterManager.init();
+
             this.observer = new IntersectionObserver((entries) => {
                 entries.forEach(entry => {
                     if (entry.isIntersecting) {
@@ -863,9 +886,7 @@
             let debounceTimer;
             const obs = new MutationObserver(m => {
                 if (m.some(x => x.addedNodes.length)) {
-                    // 連続した変更検知時はタイマーをリセットし、処理を先送りする
                     clearTimeout(debounceTimer);
-                    // 500ms待機することで、無限スクロールの処理完了を待ってから解析を行う
                     debounceTimer = setTimeout(() => this.scan(), 500);
                 }
             });
@@ -926,13 +947,11 @@
             this.ui.load(wrapper);
             try {
                 let url = `https://www.amazon.co.jp/gp/profile/${id}`;
-                // fetchにpriorityを渡す
                 let html = await NetworkManager.fetch(url, priority);
                 let res = Parser.parse(html);
 
                 if (res.error === 'NO_DATA') {
                     url = `https://www.amazon.co.jp/gp/profile/${id}/reviews`;
-                    // こちらも同様にpriorityを渡す
                     html = await NetworkManager.fetch(url, priority);
                     res = Parser.parse(html);
                 }
