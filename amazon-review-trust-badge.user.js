@@ -2,7 +2,7 @@
 // @name         Amazon Reviewer Trust Badge (Quality Check & Fake Detector)
 // @name:ja      Amazonレビュー信頼度判定バッジ (サクラ識別 & 品質チェック)
 // @namespace    https://github.com/koyasi777/amazon-review-trust-badge
-// @version      1.6.0
+// @version      1.6.1
 // @description  Visualizes the reliability of Amazon reviewers based on their review history. Detects suspicious behavior, bias, and low-quality reviews with a detailed trust score badge.
 // @description:ja Amazonのレビュアーの投稿履歴を分析し、信頼度を視覚化します。サクラやバイアス、低品質なレビューを検出し、S〜Dのランクでバッジ表示。詳細レポートで評価の偏りや文字数、写真投稿率などを確認できます。
 // @author       koyasi777
@@ -584,6 +584,9 @@
                 listContainer.classList.remove('tb-filter-s', 'tb-filter-a', 'tb-filter-b', 'tb-filter-c');
                 if (gradeKey !== 'all') listContainer.classList.add(`tb-filter-${gradeKey}`);
             });
+            if (typeof IS_Logic !== 'undefined') {
+                setTimeout(() => IS_Logic.checkTrigger(), 200);
+            }
         }
     }
 
@@ -907,7 +910,8 @@
         scrollLockId: null,
         targetScrollY: 0,
         nativeScrollTo: window.scrollTo,
-        observer: null
+        observer: null,
+        heartbeat: null
     };
 
     const IS_UI = {
@@ -965,12 +969,25 @@
             IS_State.enabled = enable;
             if (enable) document.body.classList.add('tb-is-active');
             else document.body.classList.remove('tb-is-active');
+
             if (enable) {
                 this.startMainListObserver();
                 // 即座にセットアップが必要か確認
                 if (!document.getElementById(IS_CONFIG.ARCHIVE_ID)) IS_UI.setupArchive();
+
+                // 有効化時に即座にチェック
+                this.checkTrigger();
+                // 定期的なチェックを開始 (スクロールしなくても読み込むため)
+                if (!IS_State.heartbeat) {
+                    IS_State.heartbeat = setInterval(() => this.checkTrigger(), 2000);
+                }
             } else {
                 this.disconnect();
+                // タイマー解除
+                if (IS_State.heartbeat) {
+                    clearInterval(IS_State.heartbeat);
+                    IS_State.heartbeat = null;
+                }
             }
         },
 
@@ -978,6 +995,21 @@
             if (IS_State.observer) {
                 IS_State.observer.disconnect();
                 IS_State.observer = null;
+            }
+        },
+
+        // スクロール判定ロジックを独立関数化
+        checkTrigger() {
+            if (!IS_State.enabled || IS_State.isLoading) return;
+
+            const scrollTop = window.scrollY || document.documentElement.scrollTop;
+            const windowHeight = window.innerHeight;
+            const docHeight = document.documentElement.scrollHeight;
+            const scrollBottom = docHeight - (scrollTop + windowHeight);
+
+            // 画面の下端に近い、またはコンテンツが画面より短い場合
+            if (scrollBottom < IS_CONFIG.TRIGGER_DISTANCE) {
+                this.clickNextPage();
             }
         },
 
@@ -1004,6 +1036,8 @@
                             if (loader) loader.remove();
                             IS_Logic.stopGravityAnchor();
                             IS_UI.cleanUpHeaders();
+                            // 読み込み完了後、まだ画面に余裕があれば即座に次を読みに行く
+                            setTimeout(() => IS_Logic.checkTrigger(), 500);
                         }, 800);
                     } else {
                         // フィルタ変更等によるリスト更新時
@@ -1058,7 +1092,8 @@
     };
 
     const initInfiniteScroll = () => {
-        if (!location.href.match(/\/product-reviews\/([A-Z0-9]{10})/) && !document.getElementById('ASIN')) return;
+        // 商品ページTOP(dp)等を除外し、レビュー一覧ページ(product-reviews)のみで動作させる
+        if (!location.href.match(/\/product-reviews\//)) return;
 
         // CSS Injection
         if (!document.getElementById('amz-scroll-style')) {
@@ -1078,16 +1113,14 @@
         // 初期化は FilterManager からのトグル同期で行われるため、ここではセットアップのみ
         IS_UI.setupArchive();
 
+        // スクロールイベント内では共通関数を呼ぶだけにする
         window.addEventListener('scroll', () => {
-            if (!IS_State.enabled || IS_State.isLoading) return;
-            const scrollTop = window.scrollY || document.documentElement.scrollTop;
-            const windowHeight = window.innerHeight;
-            const docHeight = document.documentElement.scrollHeight;
-            const scrollBottom = docHeight - (scrollTop + windowHeight);
+            IS_Logic.checkTrigger();
+        });
 
-            if (scrollBottom < IS_CONFIG.TRIGGER_DISTANCE) {
-                IS_Logic.clickNextPage();
-            }
+        // リサイズ時も判定する（フィルタ適用で高さが変わる場合など）
+        window.addEventListener('resize', () => {
+            IS_Logic.checkTrigger();
         });
     };
 
