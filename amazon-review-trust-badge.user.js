@@ -2,7 +2,7 @@
 // @name         Amazon Reviewer Trust Badge (Quality Check & Fake Detector)
 // @name:ja      Amazonレビュー信頼度判定バッジ (サクラ識別 & 品質チェック)
 // @namespace    https://github.com/koyasi777/amazon-review-trust-badge
-// @version      1.6.1
+// @version      1.6.2
 // @description  Visualizes the reliability of Amazon reviewers based on their review history. Detects suspicious behavior, bias, and low-quality reviews with a detailed trust score badge.
 // @description:ja Amazonのレビュアーの投稿履歴を分析し、信頼度を視覚化します。サクラやバイアス、低品質なレビューを検出し、S〜Dのランクでバッジ表示。詳細レポートで評価の偏りや文字数、写真投稿率などを確認できます。
 // @author       koyasi777
@@ -1162,7 +1162,8 @@
         },
 
         scan() {
-            const profiles = document.querySelectorAll('.review .a-profile, .review-card .a-profile, .celwidget .a-profile');
+            // プロフィールリンクを持つ要素を取得
+            const profiles = document.querySelectorAll('.review .a-profile, .review-card .a-profile, .celwidget .a-profile, [data-hook="genome-widget"] .a-profile');
 
             profiles.forEach(p => {
                 if (p.dataset.tb || !p.href) return;
@@ -1172,21 +1173,62 @@
                 if (m) {
                     const name = p.querySelector('.a-profile-name');
                     if (name) {
-                        const reviewContainer = p.closest('div.review, li.review, div.a-section.celwidget');
+                        // ---------------------------------------------------------
+                        // 1. コンテナ探索ロジックの強化 (Desktop & Mobile 対応)
+                        // ---------------------------------------------------------
+                        let reviewContainer = p.closest('div.review, li.review, div.review-card');
+
+                        // モバイル対応: プロフィールとレビュー本文が兄弟要素の場合、共通の親(mobley-review-content)を探す
+                        if (!reviewContainer) {
+                            reviewContainer = p.closest('[data-hook="mobley-review-content"]');
+                        }
+                        // 最終手段: 直近のLI要素またはcelwidgetの親を探す
+                        if (!reviewContainer) {
+                            reviewContainer = p.closest('li[role="listitem"]') || p.closest('.celwidget');
+                        }
+
                         let isVine = false;
                         let isVP = false;
 
                         if (reviewContainer) {
-                            const vpBadge = reviewContainer.querySelector('span[data-hook^="avp-badge"]');
-                            if (vpBadge) {
+                            // ---------------------------------------------------------
+                            // 2. 判定ロジックの強化 (DOM属性 & テキスト検索)
+                            // ---------------------------------------------------------
+
+                            // A. Amazonで購入 (VP) 判定
+                            // Desktop: avp-badge, avp-badge-linkless
+                            // Mobile: msrp-avp-badge-linkless
+                            const vpBadgeNode = reviewContainer.querySelector('span[data-hook*="avp-badge"]');
+                            if (vpBadgeNode) {
                                 isVP = true;
                             } else {
+                                // フォールバック: ストリップテキスト内の確認
                                 const badgeText = reviewContainer.querySelector('.review-format-strip')?.textContent || '';
                                 if (badgeText.includes('Amazonで購入')) isVP = true;
+                                // モバイルのテキスト直書きパターンへの対応
+                                if (!isVP) {
+                                    // a-color-state a-text-bold クラスを持つ要素(VPバッジのスタイル)の中身をチェック
+                                    const stateText = reviewContainer.querySelector('.a-color-state.a-text-bold')?.textContent.trim();
+                                    if (stateText === 'Amazonで購入') isVP = true;
+                                }
                             }
 
-                            const textContent = reviewContainer.textContent;
-                            if (textContent.includes('Vine先取り') || textContent.includes('Vine Customer Review')) isVine = true;
+                            // B. Vine (無償提供) 判定
+                            // 特定のバッジフックがない場合が多いため、テキスト含有チェックを行う
+                            // ただし、レビュー本文(review-body)内の引用等は除外したいが、
+                            // モバイルは構造がフラットなため、コンテナ全体のテキストから"Vine"関連の文言を探すのが最も確実。
+                            // 誤爆を防ぐため、特定のクラス（緑色のテキストなど）を優先してチェックする。
+                            
+                            const vineBadgeElement = reviewContainer.querySelector('.a-color-success'); // 緑色のテキスト
+                            if (vineBadgeElement && (vineBadgeElement.textContent.includes('Vine') || vineBadgeElement.textContent.includes('無料'))) {
+                                isVine = true;
+                            } else {
+                                // 汎用テキストチェック（ヘッダー付近にあることを期待）
+                                const fullText = reviewContainer.textContent;
+                                if (fullText.includes('Vine先取り') || fullText.includes('Vine Customer Review')) {
+                                    isVine = true;
+                                }
+                            }
                         }
 
                         this.ui.render(name.parentNode, m[0], { isVine, isVP });
