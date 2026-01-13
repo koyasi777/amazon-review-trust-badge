@@ -2,7 +2,7 @@
 // @name         Amazon Reviewer Trust Badge (Quality Check & Fake Detector)
 // @name:ja      Amazonレビュー信頼度判定バッジ (サクラ識別 & 品質チェック)
 // @namespace    https://github.com/koyasi777/amazon-review-trust-badge
-// @version      1.6.6
+// @version      1.6.7
 // @description  Visualizes the reliability of Amazon reviewers based on their review history. Detects suspicious behavior, bias, and low-quality reviews with a detailed trust score badge.
 // @description:ja Amazonのレビュアーの投稿履歴を分析し、信頼度を視覚化します。サクラやバイアス、低品質なレビューを検出し、S〜Dのランクでバッジ表示。詳細レポートで評価の偏りや文字数、写真投稿率などを確認できます。
 // @author       koyasi777
@@ -31,7 +31,7 @@
     // =============================================================================
     const CONFIG = {
         APP_NAME: 'TrustBadge',
-        VERSION: '1.6.6',
+        VERSION: '1.6.7',
         CACHE: { PREFIX: 'tr4:', TTL_SUCCESS: 604800000, TTL_FAIL: 86400000 },
         NETWORK: {
             MIN_INTERVAL: 1500,
@@ -946,6 +946,21 @@
                 badge.title = 'クリックで詳細レポートを表示';
 
                 const tags = this.translateTags(d.sc.why);
+
+                // ▼ Context Tag Injection ▼
+                let ctxConf = null;
+                if (context.isVine) ctxConf = CONFIG.TEXT.CONTEXT.VINE;
+                else if (!context.isVP) ctxConf = CONFIG.TEXT.CONTEXT.NON;
+
+                if (ctxConf) {
+                    tags.unshift({
+                        key: 'CTX',
+                        label: ctxConf.label,
+                        desc: ctxConf.desc,
+                        style: `background:${ctxConf.color};border-color:${ctxConf.border};color:${ctxConf.text}`
+                    });
+                }
+
                 algoContainer.innerHTML = tags.map(t =>
                     `<span class="tb-tag-inline" style="${t.style}" title="${t.label}">${t.label}</span>`
                 ).join('');
