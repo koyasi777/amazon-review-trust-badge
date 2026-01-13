@@ -2,7 +2,7 @@
 // @name         Amazon Reviewer Trust Badge (Quality Check & Fake Detector)
 // @name:ja      Amazonレビュー信頼度判定バッジ (サクラ識別 & 品質チェック)
 // @namespace    https://github.com/koyasi777/amazon-review-trust-badge
-// @version      1.6.5
+// @version      1.6.6
 // @description  Visualizes the reliability of Amazon reviewers based on their review history. Detects suspicious behavior, bias, and low-quality reviews with a detailed trust score badge.
 // @description:ja Amazonのレビュアーの投稿履歴を分析し、信頼度を視覚化します。サクラやバイアス、低品質なレビューを検出し、S〜Dのランクでバッジ表示。詳細レポートで評価の偏りや文字数、写真投稿率などを確認できます。
 // @author       koyasi777
@@ -31,13 +31,14 @@
     // =============================================================================
     const CONFIG = {
         APP_NAME: 'TrustBadge',
-        VERSION: '1.5.0',
+        VERSION: '1.6.6',
         CACHE: { PREFIX: 'tr4:', TTL_SUCCESS: 604800000, TTL_FAIL: 86400000 },
         NETWORK: {
-            MIN_INTERVAL: 2500,
-            JITTER: 1500,
+            MIN_INTERVAL: 1500,
+            JITTER: 1000,
             TIMEOUT: 15000,
-            LOCK_DURATION: 15 * 60 * 1000
+            LOCK_DURATION: 15 * 60 * 1000,
+            MAX_CONCURRENT: 2
         },
         SCORING: {
             BASE: 50,
@@ -110,20 +111,23 @@
     // =============================================================================
     class NetworkManager {
         static queue = [];
-        static processing = false;
+        static activeCount = 0; // 現在実行中のリクエスト数
         static circuitOpen = false;
 
         static async fetch(url, priority = false) {
             if (this.circuitOpen) throw new Error('CIRCUIT_OPEN: Emergency Lock');
+
+            // ロックチェック
             const lockUntil = await GM.getValue('emergency_lock', 0);
             if (Date.now() < lockUntil) {
                 this.circuitOpen = true;
                 throw new Error(`Locked until ${new Date(lockUntil).toLocaleTimeString()}`);
             }
+
             return new Promise((resolve, reject) => {
                 const item = { url, resolve, reject };
                 if (priority) {
-                    this.queue.unshift(item);
+                    this.queue.unshift(item); // 優先キュー
                 } else {
                     this.queue.push(item);
                 }
@@ -131,14 +135,29 @@
             });
         }
 
-        static async processQueue() {
-            if (this.processing || this.queue.length === 0) return;
-            this.processing = true;
+        static processQueue() {
+            if (this.circuitOpen) return;
+
+            // 定義された最大並列数(MAX_CONCURRENT)に達するまでワーカーを起動
+            while (this.queue.length > 0 && this.activeCount < CONFIG.NETWORK.MAX_CONCURRENT) {
+                this._runWorker();
+            }
+        }
+
+        static async _runWorker() {
+            if (this.queue.length === 0) return;
+
+            this.activeCount++;
             const { url, resolve, reject } = this.queue.shift();
+
             try {
+                // 並列処理では「一律待機」ではなく「ワーカーごとのランダム待機」でアクセスを分散させる
+                // これにより機械的なアクセスパターンを回避する
                 const wait = CONFIG.NETWORK.MIN_INTERVAL + Math.random() * CONFIG.NETWORK.JITTER;
                 await new Promise(r => setTimeout(r, wait));
+
                 const responseText = await this._execRequest(url);
+
                 if (this._detectRobot(responseText)) {
                     await this._triggerCircuitBreaker();
                     throw new Error('ROBOT_DETECTED');
@@ -147,8 +166,9 @@
             } catch (e) {
                 reject(e);
             } finally {
-                this.processing = false;
-                if (this.queue.length > 0) this.processQueue();
+                this.activeCount--;
+                // 完了後、次のタスクがあれば即座に取り掛かる
+                this.processQueue();
             }
         }
 
@@ -172,10 +192,13 @@
         }
 
         static async _triggerCircuitBreaker() {
+            if (this.circuitOpen) return;
             console.error('⚠️ AMAZON ROBOT DETECTED: Opening Circuit Breaker.');
             this.circuitOpen = true;
             const lockUntil = Date.now() + CONFIG.NETWORK.LOCK_DURATION;
             await GM.setValue('emergency_lock', lockUntil);
+
+            // 待機中のキューを全て破棄して即時停止
             this.queue.forEach(q => q.reject(new Error('CIRCUIT_OPEN_ABORT')));
             this.queue = [];
         }
