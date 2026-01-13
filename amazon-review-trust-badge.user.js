@@ -2,7 +2,7 @@
 // @name         Amazon Reviewer Trust Badge (Quality Check & Fake Detector)
 // @name:ja      Amazonレビュー信頼度判定バッジ (サクラ識別 & 品質チェック)
 // @namespace    https://github.com/koyasi777/amazon-review-trust-badge
-// @version      1.6.4
+// @version      1.6.5
 // @description  Visualizes the reliability of Amazon reviewers based on their review history. Detects suspicious behavior, bias, and low-quality reviews with a detailed trust score badge.
 // @description:ja Amazonのレビュアーの投稿履歴を分析し、信頼度を視覚化します。サクラやバイアス、低品質なレビューを検出し、S〜Dのランクでバッジ表示。詳細レポートで評価の偏りや文字数、写真投稿率などを確認できます。
 // @author       koyasi777
@@ -567,6 +567,17 @@
         }
 
         static syncFilter() {
+            // UIを挿入するターゲット（ソートオプションバー）が存在しないページ（個別レビュー画面など）では
+            // フィルタリングを強制的に解除し、何も隠さないようにする。
+            // これにより「スイッチがないのに勝手に消える」現象を防ぐ。
+            if (!document.getElementById('cm_cr-view_opt_sort_filter')) {
+                const targets = document.querySelectorAll('#cm_cr-review_list, #amz-scroll-review-archive, #amz-scroll-internal-list');
+                targets.forEach(listContainer => {
+                    listContainer.classList.remove('tb-filter-s', 'tb-filter-a', 'tb-filter-b', 'tb-filter-c');
+                });
+                return;
+            }
+
             const targets = document.querySelectorAll('#cm_cr-review_list, #amz-scroll-review-archive, #amz-scroll-internal-list');
             const cls = `tb-filter-${this.currentGrade}`;
             let needsUpdate = false;
