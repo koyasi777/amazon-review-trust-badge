@@ -1,13 +1,19 @@
 // ==UserScript==
-// @name         Amazon Reviewer Trust Badge (Quality Check & Fake Detector)
-// @name:ja      Amazonレビュー信頼度判定バッジ (サクラ識別 & 品質チェック)
+// @name         Amazonレビュー信頼度判定 & 無限スクロール (サクラ識別/品質チェック)
+// @name:ja      Amazonレビュー信頼度判定 & 無限スクロール (サクラ識別/品質チェック)
+// @name:en      Amazon Reviewer Trust Badge & Infinite Scroll (Quality Check)
 // @namespace    https://github.com/koyasi777/amazon-review-trust-badge
-// @version      1.6.7
-// @description  Visualizes the reliability of Amazon reviewers based on their review history. Detects suspicious behavior, bias, and low-quality reviews with a detailed trust score badge.
-// @description:ja Amazonのレビュアーの投稿履歴を分析し、信頼度を視覚化します。サクラやバイアス、低品質なレビューを検出し、S〜Dのランクでバッジ表示。詳細レポートで評価の偏りや文字数、写真投稿率などを確認できます。
+// @version      1.6.8
+// @description  Amazonのレビュアー投稿履歴を分析し、信頼度をS〜Dランクで視覚化（サクラ/やらせ/バイアス検出＆詳細レポート）。信頼度フィルタリング機能や、レビュー一覧の無限スクロール化も提供します。
+// @description:ja  Amazonのレビュアー投稿履歴を分析し、信頼度をS〜Dランクで視覚化（サクラ/やらせ/バイアス検出＆詳細レポート）。信頼度フィルタリング機能や、レビュー一覧の無限スクロール化も提供します。
+// @description:en Visualizes the reliability of Amazon reviewers (detects suspicious behavior/bias) and enables infinite scrolling for review pages.
 // @author       koyasi777
 // @license      MIT
 // @match        https://www.amazon.co.jp/*
+// @exclude      https://www.amazon.co.jp/gp/cart/*
+// @exclude      https://www.amazon.co.jp/gp/buy/*
+// @exclude      https://www.amazon.co.jp/ap/*
+// @exclude      https://www.amazon.co.jp/gp/help/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=amazon.co.jp
 // @updateURL    https://github.com/koyasi777/amazon-review-trust-badge/raw/main/amazon-review-trust-badge.user.js
 // @downloadURL  https://github.com/koyasi777/amazon-review-trust-badge/raw/main/amazon-review-trust-badge.user.js
@@ -20,7 +26,8 @@
 // @grant        GM.listValues
 // @grant        GM.deleteValue
 // @grant        GM.registerMenuCommand
-// @run-at       document-end
+// @run-at       document-idle
+// @noframes
 // ==/UserScript==
 
 (function () {
@@ -31,7 +38,7 @@
     // =============================================================================
     const CONFIG = {
         APP_NAME: 'TrustBadge',
-        VERSION: '1.6.7',
+        VERSION: '1.6.8',
         CACHE: { PREFIX: 'tr4:', TTL_SUCCESS: 604800000, TTL_FAIL: 86400000 },
         NETWORK: {
             MIN_INTERVAL: 1500,
