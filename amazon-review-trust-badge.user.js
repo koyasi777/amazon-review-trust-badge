@@ -3,7 +3,7 @@
 // @name:ja      Amazonレビュー信頼度判定 & 無限スクロール (サクラ識別/品質チェック)
 // @name:en      Amazon Reviewer Trust Badge & Infinite Scroll (Quality Check)
 // @namespace    https://github.com/koyasi777/amazon-review-trust-badge
-// @version      1.6.9
+// @version      1.7.0
 // @description  Amazonのレビュアー投稿履歴を分析し、信頼度をS〜Dランクで視覚化（サクラ/やらせ/バイアス検出＆詳細レポート）。信頼度フィルタリング機能や、レビュー一覧の無限スクロール化も提供します。
 // @description:ja  Amazonのレビュアー投稿履歴を分析し、信頼度をS〜Dランクで視覚化（サクラ/やらせ/バイアス検出＆詳細レポート）。信頼度フィルタリング機能や、レビュー一覧の無限スクロール化も提供します。
 // @description:en Visualizes the reliability of Amazon reviewers (detects suspicious behavior/bias) and enables infinite scrolling for review pages.
@@ -956,8 +956,12 @@
 
                 // ▼ Context Tag Injection ▼
                 let ctxConf = null;
-                if (context.isVine) ctxConf = CONFIG.TEXT.CONTEXT.VINE;
-                else if (!context.isVP) ctxConf = CONFIG.TEXT.CONTEXT.NON;
+
+                if (context.isVine) {
+                    ctxConf = null;
+                } else if (!context.isVP) {
+                    ctxConf = CONFIG.TEXT.CONTEXT.NON;
+                }
 
                 if (ctxConf) {
                     tags.unshift({
