@@ -14,7 +14,7 @@
 // @exclude      https://www.amazon.co.jp/gp/buy/*
 // @exclude      https://www.amazon.co.jp/ap/*
 // @exclude      https://www.amazon.co.jp/gp/help/*
-// @icon         https://www.google.com/s2/favicons?sz=64&domain=amazon.co.jp
+// @icon         https://raw.githubusercontent.com/koyasi777/amazon-review-trust-badge/refs/heads/main/icons/icon.png
 // @updateURL    https://github.com/koyasi777/amazon-review-trust-badge/raw/main/amazon-review-trust-badge.user.js
 // @downloadURL  https://github.com/koyasi777/amazon-review-trust-badge/raw/main/amazon-review-trust-badge.user.js
 // @supportURL   https://github.com/koyasi777/amazon-review-trust-badge/issues
