@@ -1,5 +1,9 @@
 # 🛡️ Amazon Reviewer Trust Badge (レビュー信頼度判定 & サクラ検出)
 
+<div align="center">
+  <img src="icons/icon.png" alt="Amazon Reviewer Trust Badge Logo" width="100" />
+</div>
+
 **「その★5レビュー、本当に信用できますか？」**
 
 Amazon Reviewer Trust Badgeは、**レビュアー（投稿者）の過去の活動履歴を徹底的に分析**し、その信頼度を可視化するブラウザ拡張機能（UserScript）です。
