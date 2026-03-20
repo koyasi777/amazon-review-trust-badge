@@ -3,7 +3,7 @@
 // @name:ja      Amazonレビュー信頼度判定 & 無限スクロール (サクラ識別/品質チェック)
 // @name:en      Amazon Reviewer Trust Badge & Infinite Scroll (Quality Check)
 // @namespace    https://github.com/koyasi777/amazon-review-trust-badge
-// @version      1.7.1
+// @version      1.7.2
 // @description  Amazonのレビュアー投稿履歴を分析し、信頼度をS〜Dランクで視覚化（サクラ/やらせ/バイアス検出＆詳細レポート）。信頼度フィルタリング機能や、レビュー一覧の無限スクロール化も提供します。
 // @description:ja  Amazonのレビュアー投稿履歴を分析し、信頼度をS〜Dランクで視覚化（サクラ/やらせ/バイアス検出＆詳細レポート）。信頼度フィルタリング機能や、レビュー一覧の無限スクロール化も提供します。
 // @description:en Visualizes the reliability of Amazon reviewers (detects suspicious behavior/bias) and enables infinite scrolling for review pages.
@@ -625,9 +625,6 @@
                 listContainer.classList.remove('tb-filter-s', 'tb-filter-a', 'tb-filter-b', 'tb-filter-c');
                 if (gradeKey !== 'all') listContainer.classList.add(`tb-filter-${gradeKey}`);
             });
-            if (typeof IS_Logic !== 'undefined') {
-                setTimeout(() => IS_Logic.checkTrigger(), 200);
-            }
         }
     }
 
@@ -1003,7 +1000,20 @@
         LIST_ID: 'cm_cr-review_list',
         ARCHIVE_ID: 'amz-scroll-review-archive',
         ARCHIVE_LIST_CLASS: 'a-unordered-list a-nostyle a-vertical',
-        NEXT_BTN_SELECTOR: '.a-pagination li.a-last a, #cm_cr-pagination_bar li.a-last a',
+
+        SHOW_MORE_SELECTOR: '#cm_cr-pagination_bar a[data-hook="show-more-button"]',
+
+        NEXT_BTN_SELECTOR: [
+            '#cm_cr-pagination_bar a[data-hook="show-more-button"]',
+            '#cm_cr-pagination_bar li.a-last a',
+            '#cm_cr-pagination_bar .a-pagination li.a-last a',
+            '#cm_cr-pagination_bar a[rel="next"]',
+            '#cm_cr-pagination_bar a[aria-label*="次"]',
+            '#cm_cr-pagination_bar a[aria-label*="Next"]',
+            '.a-pagination li.a-last a',
+            '.a-pagination a[rel="next"]'
+        ].join(', '),
+
         HEADER_SELECTOR: '[data-hook="arp-local-reviews-header"]'
     };
 
@@ -1014,13 +1024,132 @@
         targetScrollY: 0,
         nativeScrollTo: window.scrollTo,
         observer: null,
-        heartbeat: null
+        heartbeat: null,
+
+        loadSeq: 0,
+        loadTimeoutId: null,
+        loadCompleteTimerId: null
+    };
+
+    const IS_Debug = {
+        enabled: true,
+        seq: 0,
+        lastMetricLogAt: 0,
+
+        snapshot(extra = {}) {
+            const list = document.getElementById(IS_CONFIG.LIST_ID);
+            const archive = document.getElementById(IS_CONFIG.ARCHIVE_ID);
+            const nextBtn = document.querySelector(IS_CONFIG.NEXT_BTN_SELECTOR);
+            const paginationBar = document.getElementById('cm_cr-pagination_bar');
+            const anyPagination = document.querySelector('.a-pagination');
+
+            const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
+            const windowHeight = window.innerHeight || 0;
+            const docHeight = document.documentElement.scrollHeight || 0;
+            const scrollBottom = docHeight - (scrollTop + windowHeight);
+
+            return {
+                href: location.href,
+                enabled: IS_State.enabled,
+                isLoading: IS_State.isLoading,
+                scrollTop: Math.round(scrollTop),
+                windowHeight,
+                docHeight,
+                scrollBottom: Math.round(scrollBottom),
+
+                listFound: !!list,
+                listChildren: list ? list.children.length : 0,
+                listReviews: list ? list.querySelectorAll('li[data-hook="review"], div.review').length : 0,
+
+                archiveFound: !!archive,
+                archiveReviews: archive ? archive.querySelectorAll('li[data-hook="review"], div.review').length : 0,
+
+                paginationBarFound: !!paginationBar,
+                anyPaginationFound: !!anyPagination,
+
+                nextFound: !!nextBtn,
+                nextHref: nextBtn ? nextBtn.href : null,
+                nextText: nextBtn ? nextBtn.textContent.trim() : null,
+                nextOuterHTML: nextBtn ? nextBtn.outerHTML.slice(0, 300) : null,
+
+                ...extra
+            };
+        },
+
+        log(event, data = {}) {
+            if (!this.enabled) return;
+            const id = String(++this.seq).padStart(3, '0');
+            console.log(`[TB-IS ${id}] ${event}`, data);
+        },
+
+        warn(event, data = {}) {
+            if (!this.enabled) return;
+            const id = String(++this.seq).padStart(3, '0');
+            console.warn(`[TB-IS ${id}] ${event}`, data);
+        },
+
+        error(event, data = {}) {
+            if (!this.enabled) return;
+            const id = String(++this.seq).padStart(3, '0');
+            console.error(`[TB-IS ${id}] ${event}`, data);
+        },
+
+        metric(reason) {
+            if (!this.enabled) return;
+            const now = Date.now();
+            const snap = this.snapshot({ reason });
+            if (snap.scrollBottom < IS_CONFIG.TRIGGER_DISTANCE + 300 || now - this.lastMetricLogAt > 3000) {
+                this.lastMetricLogAt = now;
+                this.log('metric', snap);
+            }
+        },
+
+        dumpPagination() {
+            const paginationBar = document.getElementById('cm_cr-pagination_bar');
+            const paginations = Array.from(document.querySelectorAll('.a-pagination'));
+            const anchors = Array.from(document.querySelectorAll(
+                'a[data-hook="show-more-button"], a[href*="pageNumber="], a[aria-label*="次"], a[aria-label*="Next"], a[rel="next"]'
+            ));
+
+            this.log('dumpPagination', {
+                url: location.href,
+                title: document.title,
+
+                paginationBarOuterHTML: paginationBar ? paginationBar.outerHTML.slice(0, 3000) : null,
+
+                paginationBlocks: paginations.map((el, i) => ({
+                    index: i,
+                    outerHTML: el.outerHTML.slice(0, 2000)
+                })),
+
+                candidateAnchors: anchors.map((a, i) => ({
+                    index: i,
+                    text: a.textContent.trim(),
+                    ariaLabel: a.getAttribute('aria-label'),
+                    rel: a.getAttribute('rel'),
+                    href: a.href,
+                    dataHook: a.getAttribute('data-hook'),
+                    className: a.className,
+                    outerHTML: a.outerHTML.slice(0, 500)
+                }))
+            });
+        }
     };
 
     const IS_UI = {
         setupArchive: () => {
+            IS_Debug.log('setupArchive:begin', IS_Debug.snapshot());
+
             const list = document.getElementById(IS_CONFIG.LIST_ID);
-            if (!list || document.getElementById(IS_CONFIG.ARCHIVE_ID)) return;
+            if (!list) {
+                IS_Debug.warn('setupArchive:no_list', IS_Debug.snapshot());
+                return;
+            }
+            if (document.getElementById(IS_CONFIG.ARCHIVE_ID)) {
+                IS_Debug.log('setupArchive:already_exists', IS_Debug.snapshot());
+                return;
+            }
+
             const archive = document.createElement('div');
             archive.id = IS_CONFIG.ARCHIVE_ID;
             const ul = document.createElement('ul');
@@ -1028,69 +1157,164 @@
             ul.id = 'amz-scroll-internal-list';
             archive.appendChild(ul);
             list.parentNode.insertBefore(archive, list);
+
+            IS_Debug.log('setupArchive:done', IS_Debug.snapshot());
         },
+
         destroyArchive: () => {
-            // アーカイブは破壊せず、ローダーのみ除去 (ユーザー体験維持のため)
             const loader = document.getElementById('amz-scroll-native-loader');
             if (loader) loader.remove();
+            IS_Debug.log('destroyArchive', IS_Debug.snapshot());
         },
+
         cleanUpHeaders: () => {
             const headers = document.querySelectorAll(IS_CONFIG.HEADER_SELECTOR);
             if (headers.length > 1) {
                 for (let i = 1; i < headers.length; i++) headers[i].remove();
             }
+            IS_Debug.log('cleanUpHeaders', { headerCount: headers.length });
         },
+
         moveToArchive: () => {
             const list = document.getElementById(IS_CONFIG.LIST_ID);
             const archive = document.getElementById(IS_CONFIG.ARCHIVE_ID);
             const internalUl = document.getElementById('amz-scroll-internal-list');
-            if (!list || !archive || !internalUl) return;
+
+            if (!list || !archive || !internalUl) {
+                IS_Debug.warn('moveToArchive:missing_target', IS_Debug.snapshot());
+                return;
+            }
+
             IS_UI.cleanUpHeaders();
+
             const header = document.querySelector(IS_CONFIG.HEADER_SELECTOR);
             if (header && !archive.contains(header)) archive.insertBefore(header, internalUl);
+
             let reviews = list.querySelectorAll('li[data-hook="review"]');
             if (reviews.length === 0) reviews = list.querySelectorAll('div.review');
+
+            const moved = reviews.length;
             reviews.forEach(review => {
                 review.classList.add('a-spacing-large');
                 internalUl.appendChild(review);
             });
+
+            IS_Debug.log('moveToArchive:done', IS_Debug.snapshot({ moved }));
         },
+
         createLoader: () => {
             const list = document.getElementById(IS_CONFIG.LIST_ID);
             const old = document.getElementById('amz-scroll-native-loader');
             if (old) old.remove();
+
+            if (!list) {
+                IS_Debug.warn('createLoader:no_list', IS_Debug.snapshot());
+                return;
+            }
+
             const loader = document.createElement('div');
             loader.id = 'amz-scroll-native-loader';
-            loader.style.cssText = 'text-align: center; padding: 20px; background: #fff; color: #777; font-size: 13px; border-radius: 4px; margin-bottom: 20px; clear: both;';
+            loader.style.cssText = 'text-align: center; padding: 20px; background: #fff; color: #777; font-size: 13px; border-radius: 4px; margin: 12px 0 20px; clear: both;';
             loader.innerHTML = '<span class="a-spinner-medium"></span> 次のレビューを読み込んでいます...';
-            list.appendChild(loader);
+
+            list.insertAdjacentElement('afterend', loader);
+
+            IS_Debug.log('createLoader:done', IS_Debug.snapshot());
+        }
+    };
+
+    const IS_Helper = {
+        isShowMoreMode() {
+            return !!document.querySelector(IS_CONFIG.SHOW_MORE_SELECTOR);
+        },
+
+        safeClick(el) {
+            if (!el) return false;
+
+            try {
+                if (typeof el.click === 'function') {
+                    el.click();
+                    return true;
+                }
+            } catch (e) {
+                console.warn('TrustBadge: native click failed', e);
+            }
+
+            try {
+                el.dispatchEvent(new MouseEvent('click', {
+                    bubbles: true,
+                    cancelable: true
+                }));
+                return true;
+            } catch (e) {
+                console.warn('TrustBadge: dispatchEvent click failed', e);
+            }
+
+            return false;
+        },
+
+        clearLoadTimers() {
+            if (IS_State.loadTimeoutId) {
+                clearTimeout(IS_State.loadTimeoutId);
+                IS_State.loadTimeoutId = null;
+            }
+            if (IS_State.loadCompleteTimerId) {
+                clearTimeout(IS_State.loadCompleteTimerId);
+                IS_State.loadCompleteTimerId = null;
+            }
+        },
+
+        resetLoading(reason = 'unknown', seq = null) {
+            if (seq !== null && seq !== IS_State.loadSeq) {
+                IS_Debug.log('resetLoading:stale_skip', {
+                    reason,
+                    seq,
+                    currentSeq: IS_State.loadSeq
+                });
+                return;
+            }
+
+            IS_Debug.warn('resetLoading', { reason, seq, snap: IS_Debug.snapshot() });
+
+            this.clearLoadTimers();
+
+            IS_State.isLoading = false;
+            IS_Logic.stopGravityAnchor?.();
+
+            const loader = document.getElementById('amz-scroll-native-loader');
+            if (loader) loader.remove();
         }
     };
 
     const IS_Logic = {
         toggle(enable) {
+            IS_Debug.log('toggle', { enable });
             IS_State.enabled = enable;
+
             if (enable) document.body.classList.add('tb-is-active');
             else document.body.classList.remove('tb-is-active');
 
             if (enable) {
-                this.startMainListObserver();
-                // 即座にセットアップが必要か確認
-                if (!document.getElementById(IS_CONFIG.ARCHIVE_ID)) IS_UI.setupArchive();
+                if (!IS_Helper.isShowMoreMode() && !document.getElementById(IS_CONFIG.ARCHIVE_ID)) {
+                    IS_UI.setupArchive();
+                }
 
-                // 有効化時に即座にチェック
-                this.checkTrigger();
-                // 定期的なチェックを開始 (スクロールしなくても読み込むため)
+                this.startMainListObserver();
+
                 if (!IS_State.heartbeat) {
                     IS_State.heartbeat = setInterval(() => this.checkTrigger(), 2000);
+                    IS_Debug.log('heartbeat:start', { intervalMs: 2000 });
                 }
+
+                setTimeout(() => this.checkTrigger(), 100);
             } else {
                 this.disconnect();
-                // タイマー解除
                 if (IS_State.heartbeat) {
                     clearInterval(IS_State.heartbeat);
                     IS_State.heartbeat = null;
+                    IS_Debug.log('heartbeat:stop');
                 }
+                IS_Helper.resetLoading('toggle_off');
             }
         },
 
@@ -1098,65 +1322,130 @@
             if (IS_State.observer) {
                 IS_State.observer.disconnect();
                 IS_State.observer = null;
+                IS_Debug.log('observer:disconnect');
             }
         },
 
-        // スクロール判定ロジックを独立関数化
         checkTrigger() {
-            if (!IS_State.enabled || IS_State.isLoading) return;
+            if (!IS_State.enabled) {
+                IS_Debug.metric('checkTrigger:disabled');
+                return;
+            }
+            if (IS_State.isLoading) {
+                IS_Debug.metric('checkTrigger:loading');
+                return;
+            }
 
-            const scrollTop = window.scrollY || document.documentElement.scrollTop;
-            const windowHeight = window.innerHeight;
-            const docHeight = document.documentElement.scrollHeight;
-            const scrollBottom = docHeight - (scrollTop + windowHeight);
+            const snap = IS_Debug.snapshot({ reason: 'checkTrigger' });
 
-            // 画面の下端に近い、またはコンテンツが画面より短い場合
-            if (scrollBottom < IS_CONFIG.TRIGGER_DISTANCE) {
+            if (snap.scrollBottom < IS_CONFIG.TRIGGER_DISTANCE) {
+                IS_Debug.log('checkTrigger:threshold_hit', snap);
                 this.clickNextPage();
+            } else {
+                IS_Debug.metric('checkTrigger:waiting');
             }
         },
 
         startMainListObserver: () => {
-            if (!IS_State.enabled) return;
+            if (!IS_State.enabled) {
+                IS_Debug.warn('observer:start_skipped_disabled');
+                return;
+            }
+
             const list = document.getElementById(IS_CONFIG.LIST_ID);
-            if (!list) return;
+            if (!list) {
+                IS_Debug.warn('observer:no_list', IS_Debug.snapshot());
+                return;
+            }
+
             if (IS_State.observer) IS_State.observer.disconnect();
+
+            IS_Debug.log('observer:start', IS_Debug.snapshot());
 
             IS_State.observer = new MutationObserver((mutations) => {
                 if (!IS_State.enabled) return;
+
+                const summary = mutations.map(m => ({
+                    type: m.type,
+                    added: m.addedNodes.length,
+                    removed: m.removedNodes.length
+                }));
+
                 let nodesAdded = false;
                 for (const mutation of mutations) {
                     if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
                         const hasElement = Array.from(mutation.addedNodes).some(node => node.nodeType === 1);
-                        if (hasElement) { nodesAdded = true; break; }
+                        if (hasElement) {
+                            nodesAdded = true;
+                            break;
+                        }
                     }
                 }
+
                 if (nodesAdded) {
+                    IS_Debug.log('observer:mutation_detected', {
+                        summary,
+                        snap: IS_Debug.snapshot()
+                    });
+
                     if (IS_State.isLoading) {
-                        setTimeout(() => {
+                        const seq = IS_State.loadSeq;
+
+                        if (IS_State.loadCompleteTimerId) {
+                            clearTimeout(IS_State.loadCompleteTimerId);
+                        }
+
+                        IS_State.loadCompleteTimerId = setTimeout(() => {
+                            if (seq !== IS_State.loadSeq) {
+                                IS_Debug.log('observer:load_complete_stale_skip', {
+                                    seq,
+                                    currentSeq: IS_State.loadSeq
+                                });
+                                return;
+                            }
+
+                            IS_Debug.log('observer:load_complete_before_reset', IS_Debug.snapshot({ seq }));
+
+                            IS_Helper.clearLoadTimers();
                             IS_State.isLoading = false;
+
                             const loader = document.getElementById('amz-scroll-native-loader');
                             if (loader) loader.remove();
+
                             IS_Logic.stopGravityAnchor();
                             IS_UI.cleanUpHeaders();
-                            // 読み込み完了後、まだ画面に余裕があれば即座に次を読みに行く
+
+                            IS_Debug.log('observer:load_complete_after_reset', IS_Debug.snapshot({ seq }));
+
                             setTimeout(() => IS_Logic.checkTrigger(), 500);
                         }, 800);
                     } else {
-                        // フィルタ変更等によるリスト更新時
-                        const archive = document.getElementById(IS_CONFIG.ARCHIVE_ID);
-                        if (archive) archive.remove(); // リセット
-                        IS_UI.setupArchive();
-                        setTimeout(IS_UI.cleanUpHeaders, 100);
+                        if (!IS_Helper.isShowMoreMode()) {
+                            const archive = document.getElementById(IS_CONFIG.ARCHIVE_ID);
+                            if (archive) archive.remove();
+                            IS_UI.setupArchive();
+                            setTimeout(IS_UI.cleanUpHeaders, 100);
+
+                            IS_Debug.log('observer:mutation_non_loading_reset', IS_Debug.snapshot());
+                        } else {
+                            IS_Debug.log('observer:mutation_non_loading_ignore_show_more', IS_Debug.snapshot());
+                        }
                     }
                 }
             });
-            IS_State.observer.observe(list, { childList: true, subtree: false });
+
+            IS_State.observer.observe(list, { childList: true, subtree: true });
         },
 
         startGravityAnchor: () => {
-            if (IS_State.scrollLockId) return;
+            if (IS_State.scrollLockId) {
+                IS_Debug.warn('gravity:start_skipped_already_running');
+                return;
+            }
+
             IS_State.targetScrollY = window.scrollY || document.documentElement.scrollTop;
+            IS_Debug.log('gravity:start', { targetScrollY: IS_State.targetScrollY });
+
             const lockLoop = () => {
                 IS_State.nativeScrollTo.call(window, 0, IS_State.targetScrollY);
                 IS_State.scrollLockId = requestAnimationFrame(lockLoop);
@@ -1168,37 +1457,165 @@
             if (IS_State.scrollLockId) {
                 cancelAnimationFrame(IS_State.scrollLockId);
                 IS_State.scrollLockId = null;
+                IS_Debug.log('gravity:stop');
             }
         },
 
         clickNextPage: () => {
-            if (!IS_State.enabled || IS_State.isLoading) return;
-            const nextBtn = document.querySelector(IS_CONFIG.NEXT_BTN_SELECTOR);
-            if (!nextBtn) return;
+            const pre = IS_Debug.snapshot({ reason: 'clickNextPage:before' });
+
+            if (!IS_State.enabled) {
+                IS_Debug.warn('clickNextPage:disabled', pre);
+                return;
+            }
+            if (IS_State.isLoading) {
+                IS_Debug.warn('clickNextPage:already_loading', pre);
+                return;
+            }
+
+            // ------------------------------------------------------------
+            // A. Amazonの新UI: 「さらに10件のレビューを表示」方式
+            // ------------------------------------------------------------
+            const showMoreBtn = document.querySelector(IS_CONFIG.SHOW_MORE_SELECTOR);
+            if (showMoreBtn) {
+                const showMoreDisabled = !!(
+                    showMoreBtn.getAttribute('aria-disabled') === 'true' ||
+                    showMoreBtn.closest('.a-button')?.classList.contains('a-button-disabled')
+                );
+
+                if (showMoreDisabled) {
+                    IS_Debug.warn('clickNextPage:show_more_disabled', pre);
+                    return;
+                }
+
+                IS_State.isLoading = true;
+                IS_State.loadSeq += 1;
+                const seq = IS_State.loadSeq;
+                IS_Helper.clearLoadTimers();
+
+                IS_Debug.log('clickNextPage:show_more_click', IS_Debug.snapshot({
+                    seq,
+                    buttonText: showMoreBtn.textContent.trim(),
+                    buttonHref: showMoreBtn.href,
+                    stateParam: showMoreBtn.getAttribute('data-reviews-state-param')
+                }));
+
+                IS_UI.createLoader();
+
+                const clicked = IS_Helper.safeClick(showMoreBtn);
+                if (!clicked) {
+                    IS_Helper.resetLoading('show_more_click_failed', seq);
+                    return;
+                }
+
+                setTimeout(() => {
+                    if (seq !== IS_State.loadSeq) return;
+                    IS_Debug.log('clickNextPage:show_more_after_1s', IS_Debug.snapshot({ seq }));
+                }, 1000);
+
+                setTimeout(() => {
+                    if (seq !== IS_State.loadSeq) return;
+                    IS_Debug.log('clickNextPage:show_more_after_3s', IS_Debug.snapshot({ seq }));
+                }, 3000);
+
+                IS_State.loadTimeoutId = setTimeout(() => {
+                    if (IS_State.isLoading && seq === IS_State.loadSeq) {
+                        IS_Helper.resetLoading('show_more_timeout', seq);
+                    }
+                }, 10000);
+
+                return;
+            }
+
+            // ------------------------------------------------------------
+            // B. 旧UI/従来ページネーション fallback
+            // ------------------------------------------------------------
+            let nextBtn = document.querySelector(IS_CONFIG.NEXT_BTN_SELECTOR);
+
+            if (!nextBtn) {
+                const paginationBar = document.getElementById('cm_cr-pagination_bar');
+                if (paginationBar) {
+                    nextBtn = paginationBar.querySelector(
+                        'a[rel="next"], a[aria-label*="次"], a[aria-label*="Next"], a[href*="pageNumber="]'
+                    );
+                }
+            }
+
+            if (!nextBtn) {
+                IS_Debug.dumpPagination();
+                IS_Debug.error('clickNextPage:no_next_btn', pre);
+                return;
+            }
+
+            const nextLi = nextBtn.closest('li');
+            const disabled = !!(
+                nextBtn.getAttribute('aria-disabled') === 'true' ||
+                nextLi?.classList.contains('a-disabled') ||
+                nextLi?.getAttribute('aria-disabled') === 'true'
+            );
+
+            if (disabled) {
+                IS_Debug.warn('clickNextPage:next_disabled', pre);
+                return;
+            }
 
             IS_State.isLoading = true;
+
+            IS_Debug.log('clickNextPage:clicking', IS_Debug.snapshot({
+                nextHref: nextBtn.href,
+                nextText: nextBtn.textContent.trim()
+            }));
+
+            // 従来ページネーション時のみ archive 退避
             IS_Logic.startGravityAnchor();
             IS_UI.moveToArchive();
             IS_UI.createLoader();
-            nextBtn.click();
 
-            // タイムアウト保護
+            const clicked = IS_Helper.safeClick(nextBtn);
+            if (!clicked) {
+                IS_Helper.resetLoading('next_click_failed');
+                return;
+            }
+
+            setTimeout(() => {
+                IS_Debug.log('clickNextPage:after_1s', IS_Debug.snapshot());
+            }, 1000);
+
+            setTimeout(() => {
+                IS_Debug.log('clickNextPage:after_3s', IS_Debug.snapshot());
+            }, 3000);
+
             setTimeout(() => {
                 if (IS_State.isLoading) {
-                    IS_State.isLoading = false;
-                    IS_Logic.stopGravityAnchor();
-                    const loader = document.getElementById('amz-scroll-native-loader');
-                    if (loader) loader.remove();
+                    IS_Helper.resetLoading('next_timeout');
                 }
             }, 10000);
         }
     };
 
     const initInfiniteScroll = () => {
-        // 商品ページTOP(dp)等を除外し、レビュー一覧ページ(product-reviews)のみで動作させる
-        if (!location.href.match(/\/product-reviews\//)) return;
+        IS_Debug.log('initInfiniteScroll:start', { href: location.href });
 
-        // CSS Injection
+        if (!location.href.match(/\/product-reviews\//)) {
+            IS_Debug.warn('initInfiniteScroll:skip_not_review_page', { href: location.href });
+            return;
+        }
+
+        window.TBIS = {
+            snapshot: () => IS_Debug.snapshot(),
+            check: () => IS_Logic.checkTrigger(),
+            next: () => IS_Logic.clickNextPage(),
+            state: IS_State
+        };
+
+        window.addEventListener('beforeunload', () => {
+            IS_Debug.warn('window:beforeunload', { href: location.href });
+        });
+
+        window.addEventListener('pageshow', () => {
+            IS_Debug.log('window:pageshow', { href: location.href });
+        });
+
         if (!document.getElementById('amz-scroll-style')) {
             const style = document.createElement('style');
             style.id = 'amz-scroll-style';
@@ -1213,18 +1630,21 @@
             document.head.appendChild(style);
         }
 
-        // 初期化は FilterManager からのトグル同期で行われるため、ここではセットアップのみ
-        IS_UI.setupArchive();
+        if (!IS_Helper.isShowMoreMode()) {
+            IS_UI.setupArchive();
+        }
 
-        // スクロールイベント内では共通関数を呼ぶだけにする
         window.addEventListener('scroll', () => {
             IS_Logic.checkTrigger();
         });
 
-        // リサイズ時も判定する（フィルタ適用で高さが変わる場合など）
         window.addEventListener('resize', () => {
             IS_Logic.checkTrigger();
         });
+
+        setTimeout(() => {
+            IS_Debug.log('initInfiniteScroll:ready', IS_Debug.snapshot());
+        }, 1000);
     };
 
     // =============================================================================
